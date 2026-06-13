@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -51,6 +51,16 @@
       {
         "command": "windowDeck.setCurrentWindowColor",
         "title": "Window Deck: Set Current Window Color",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.configureCurrentWindow",
+        "title": "Window Deck: Configure Current Window",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.applyCurrentWindowTitle",
+        "title": "Window Deck: Apply VS Code Window Title Marker",
         "category": "Window Deck"
       },
       {
@@ -110,6 +120,12 @@
         },
         {
           "command": "windowDeck.setCurrentWindowColor"
+        },
+        {
+          "command": "windowDeck.configureCurrentWindow"
+        },
+        {
+          "command": "windowDeck.applyCurrentWindowTitle"
         },
         {
           "command": "windowDeck.cleanupStaleWindows"

@@ -116,10 +116,15 @@ async function focusKdeWayland(titleCandidates: string[]): Promise<FocusResult> 
   await fs.writeFile(scriptPath, kwinFocusScript(titleCandidates), "utf8");
 
   try {
-    await execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptPath, pluginName]);
-    await execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start"]);
+    const scriptId = await execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptPath, pluginName]);
+    const id = scriptId.trim();
+    if (!/^\d+$/.test(id)) {
+      throw new Error(`KWin did not return a script id: ${scriptId}`);
+    }
+    await execFile(qdbus, ["org.kde.KWin", `/Scripting/Script${id}`, "org.kde.kwin.Script.run"]);
     setTimeout(() => {
-      void execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", pluginName]).finally(() => {
+      void execFile(qdbus, ["org.kde.KWin", `/Scripting/Script${id}`, "org.kde.kwin.Script.stop"]).finally(() => {
+        void execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", pluginName]);
         void fs.rm(scriptPath, { force: true });
       });
     }, 1000);
@@ -241,6 +246,14 @@ for (const win of listWindows()) {
 
   try {
     workspace.activeWindow = win;
+  } catch (error) {}
+
+  try {
+    workspace.raiseWindow(win);
+  } catch (error) {}
+
+  try {
+    workspace.forceActiveWindow = win;
   } catch (error) {}
 
   break;

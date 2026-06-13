@@ -15,7 +15,8 @@ let currentTitleToken: string;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   registry = new Registry(registryDirectory(context));
   currentWindowId = `${process.pid}-${randomId(8)}`;
-  currentTitleToken = `WD:${randomId(3)}`;
+  currentTitleToken = context.workspaceState.get<string>("windowDeck.titleToken") ?? `WD:${randomId(3)}`;
+  await context.workspaceState.update("windowDeck.titleToken", currentTitleToken);
 
   await ensureTitleToken();
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -26,6 +27,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("windowDeck.showWindows", showWindows),
     vscode.commands.registerCommand("windowDeck.renameCurrentWindow", renameCurrentWindow),
     vscode.commands.registerCommand("windowDeck.setCurrentWindowColor", setCurrentWindowColor),
+    vscode.commands.registerCommand("windowDeck.configureCurrentWindow", configureCurrentWindow),
+    vscode.commands.registerCommand("windowDeck.applyCurrentWindowTitle", applyCurrentWindowTitle),
     vscode.commands.registerCommand("windowDeck.cleanupStaleWindows", cleanupStaleWindows),
     vscode.commands.registerCommand("windowDeck.diagnoseFocusSupport", diagnoseFocusSupport),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
@@ -86,6 +89,7 @@ async function showWindows(): Promise<void> {
     return;
   }
   if (selected.record.windowId === currentWindowId) {
+    await configureCurrentWindow();
     return;
   }
   const result = await focusWindow(selected.record);
@@ -114,7 +118,7 @@ async function renameCurrentWindow(): Promise<void> {
 async function setCurrentWindowColor(): Promise<void> {
   const palette = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
   const picked = await vscode.window.showQuickPick(
-    palette.map((color) => ({ label: color, description: "Window Deck UI color" })),
+    palette.map((color) => ({ label: color, description: "Window Deck UI color", detail: colorName(color) })),
     { title: "Window Deck: Set Current Window Color" }
   );
   if (!picked) {
@@ -125,6 +129,57 @@ async function setCurrentWindowColor(): Promise<void> {
     await applyWorkbenchColor(picked.label);
   }
   await heartbeat();
+}
+
+async function configureCurrentWindow(): Promise<void> {
+  await heartbeat();
+  const data = await registry.read();
+  const current = data.windows.find((record) => record.windowId === currentWindowId);
+  const picked = await vscode.window.showQuickPick(
+    [
+      { label: "$(edit) Rename", description: titleFromRecord(current?.alias, current?.workspaceName), action: "rename" },
+      { label: "$(symbol-color) Set Color", description: current?.color ?? "No color", action: "color" },
+      { label: "$(window) Apply VS Code Title Marker", description: `[${currentTitleToken}]`, action: "title" },
+      { label: "$(symbol-color) Apply Color to Workbench", description: "Writes workspace workbench.colorCustomizations", action: "workbenchColor" },
+      { label: "$(copy) Copy Window Info", description: current?.workspaceName ?? "Current window", action: "copy" }
+    ],
+    { title: "Window Deck: Configure Current Window" }
+  );
+  if (!picked) {
+    return;
+  }
+  if (picked.action === "rename") {
+    await renameCurrentWindow();
+  } else if (picked.action === "color") {
+    await setCurrentWindowColor();
+  } else if (picked.action === "title") {
+    await applyCurrentWindowTitle();
+  } else if (picked.action === "workbenchColor") {
+    if (!current?.color) {
+      await vscode.window.showWarningMessage("Set a Window Deck color first.");
+      return;
+    }
+    await applyWorkbenchColor(current.color);
+    await vscode.window.showInformationMessage("Window Deck wrote workbench color customizations for this workspace.");
+  } else if (picked.action === "copy") {
+    await vscode.env.clipboard.writeText(JSON.stringify(current, null, 2));
+    await vscode.window.showInformationMessage("Window Deck copied current window info.");
+  }
+}
+
+async function applyCurrentWindowTitle(): Promise<void> {
+  const hasWorkspace = Boolean(vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length);
+  if (!hasWorkspace) {
+    await vscode.window.showWarningMessage("Window Deck can only apply a per-workspace title marker when a folder or workspace is open.");
+    return;
+  }
+  const data = await registry.read();
+  const current = data.windows.find((record) => record.windowId === currentWindowId);
+  const aliasOrRoot = current?.alias?.trim() || "${rootName}";
+  const title = `${aliasOrRoot}${"${separator}${activeEditorShort}"} [${currentTitleToken}]`;
+  await vscode.workspace.getConfiguration("window").update("title", title, vscode.ConfigurationTarget.Workspace);
+  await heartbeat();
+  await vscode.window.showInformationMessage(`Window Deck applied workspace title marker [${currentTitleToken}].`);
 }
 
 async function cleanupStaleWindows(): Promise<void> {
@@ -208,10 +263,24 @@ function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
   const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), branch, current, stale, `active ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
   return {
     label: `${dot} ${title}`,
-    description: record.color,
+    description: [record.color, record.windowId === currentWindowId ? "select to configure" : undefined].filter(Boolean).join(" · "),
     detail: detailParts.join(" · "),
     record
   };
+}
+
+function colorName(color: string): string {
+  const names: Record<string, string> = {
+    "#4f8cff": "Blue",
+    "#2fb344": "Green",
+    "#f59f00": "Amber",
+    "#e03131": "Red",
+    "#9c36b5": "Purple",
+    "#0ca678": "Teal",
+    "#f76707": "Orange",
+    "#495057": "Gray"
+  };
+  return names[color] ?? "Custom";
 }
 
 function remoteLabel(record: WindowRecord): string {
