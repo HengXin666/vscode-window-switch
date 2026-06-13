@@ -13,7 +13,8 @@ Window Deck is a VS Code multi-window navigator. It does not swap workspaces, re
 - Best-effort focus support:
   - macOS: AppleScript fallback by matching the Window Deck title token.
   - Linux X11: `wmctrl` or `xdotool` fallback when installed.
-  - Linux Wayland: indexing works; focus reports the platform limitation.
+  - Linux Wayland KDE: KWin D-Bus script fallback through `qdbus6` or `qdbus`.
+  - Other Linux Wayland desktops: indexing works; focus reports the platform limitation.
 - Cleans stale entries with `Window Deck: Cleanup Stale Windows`.
 - Reports platform focus support with `Window Deck: Diagnose Focus Support`.
 
@@ -40,3 +41,5 @@ The workflow needs the repository setting `Actions: Read and write permissions` 
 ## Notes
 
 Automatic OS focusing is best-effort in this MVP. VS Code exposes `window.title` as configuration rather than a per-window runtime title API, so Window Deck does not automatically write a unique token into global settings.
+
+On KDE Wayland, install Qt D-Bus tools so `qdbus6` or `qdbus` is available. Window Deck then asks KWin to focus a matching VS Code window by title. This remains best-effort because KWin controls the final activation behavior.

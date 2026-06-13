@@ -1,7 +1,10 @@
 import * as childProcess from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import { FocusResult, WindowRecord } from "./types";
-import { linuxSession } from "./util";
+import { desktopEnvironment, linuxSession } from "./util";
 
 export async function focusWindow(record: WindowRecord): Promise<FocusResult> {
   const titleCandidates = candidateTitles(record);
@@ -13,10 +16,10 @@ export async function focusWindow(record: WindowRecord): Promise<FocusResult> {
   }
   if (process.platform === "linux") {
     if (linuxSession() === "wayland") {
-      return {
-        ok: false,
-        reason: "当前 Linux Wayland 环境通常不允许外部程序强制切换窗口。Window Deck 仍可作为窗口索引器使用。"
-      };
+      if (desktopEnvironment() === "kde") {
+        return focusKdeWayland(titleCandidates);
+      }
+      return waylandUnsupportedResult();
     }
     return focusLinuxX11(titleCandidates);
   }
@@ -33,6 +36,9 @@ export function focusSupportMessage(): string {
       return "Linux X11: 支持通过 wmctrl 或 xdotool 按标题 token 聚焦。请确认至少安装其中一个工具。";
     }
     if (session === "wayland") {
+      if (desktopEnvironment() === "kde") {
+        return "Linux Wayland KDE: 通过 KWin D-Bus 脚本接口 best-effort 聚焦。需要 qdbus6 或 qdbus 可用。";
+      }
       return "Linux Wayland: 支持窗口索引、命名和颜色；自动聚焦受桌面安全模型限制，仅 best-effort。";
     }
     return "Linux: 无法判断当前是 X11 还是 Wayland，自动聚焦能力未知。";
@@ -96,6 +102,37 @@ async function focusLinuxX11(titleCandidates: string[]): Promise<FocusResult> {
   };
 }
 
+async function focusKdeWayland(titleCandidates: string[]): Promise<FocusResult> {
+  const qdbus = (await findCommand(["qdbus6", "qdbus"]));
+  if (!qdbus) {
+    return {
+      ok: false,
+      reason: "当前 KDE Wayland 环境可通过 KWin 脚本 best-effort 聚焦，但未找到 qdbus6/qdbus。请安装 Qt D-Bus 工具后重试。"
+    };
+  }
+
+  const pluginName = `window-deck-focus-${process.pid}-${Date.now()}`;
+  const scriptPath = path.join(os.tmpdir(), `${pluginName}.js`);
+  await fs.writeFile(scriptPath, kwinFocusScript(titleCandidates), "utf8");
+
+  try {
+    await execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptPath, pluginName]);
+    await execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start"]);
+    setTimeout(() => {
+      void execFile(qdbus, ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", pluginName]).finally(() => {
+        void fs.rm(scriptPath, { force: true });
+      });
+    }, 1000);
+    return { ok: true };
+  } catch (error) {
+    await fs.rm(scriptPath, { force: true });
+    return {
+      ok: false,
+      reason: `KDE Wayland 聚焦请求失败：${(error as Error).message}`
+    };
+  }
+}
+
 function execFile(file: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     childProcess.execFile(file, args, { timeout: 3000 }, (error, stdout, stderr) => {
@@ -109,16 +146,28 @@ function execFile(file: string, args: string[]): Promise<string> {
 }
 
 async function commandExists(command: string): Promise<boolean> {
-  try {
-    await execFile("command", ["-v", command]);
-    return true;
-  } catch {
-    try {
-      await execFile("which", [command]);
-      return true;
-    } catch {
-      return false;
+  return (await findCommand([command])) !== undefined;
+}
+
+async function findCommand(commands: string[]): Promise<string | undefined> {
+  for (const command of commands) {
+    if (path.isAbsolute(command)) {
+      return command;
     }
+    const found = await which(command);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+async function which(command: string): Promise<string | undefined> {
+  try {
+    const output = await execFile("which", [command]);
+    return output.trim() || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -130,4 +179,71 @@ function candidateTitles(record: WindowRecord): string[] {
   return [record.titleToken, record.alias, record.workspaceName]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim());
+}
+
+function waylandUnsupportedResult(): FocusResult {
+  return {
+    ok: false,
+    reason: "当前 Linux Wayland 环境通常不允许外部程序强制切换窗口。Window Deck 仍可作为窗口索引器使用。"
+  };
+}
+
+function kwinFocusScript(titleCandidates: string[]): string {
+  return `
+const needles = ${JSON.stringify(titleCandidates)};
+
+function listWindows() {
+  if (typeof workspace.windowList === "function") {
+    return workspace.windowList();
+  }
+  if (typeof workspace.clientList === "function") {
+    return workspace.clientList();
+  }
+  return [];
+}
+
+function windowCaption(win) {
+  try {
+    return String(win.caption || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function onCurrentDesktop(win) {
+  try {
+    if (!workspace.currentDesktop || !win.desktops || win.desktops.length === 0) {
+      return true;
+    }
+    return win.desktops.some((desktop) => desktop.id === workspace.currentDesktop.id);
+  } catch (error) {
+    return true;
+  }
+}
+
+for (const win of listWindows()) {
+  const caption = windowCaption(win);
+  if (!caption || !needles.some((needle) => caption.includes(needle))) {
+    continue;
+  }
+
+  try {
+    if (win.minimized) {
+      win.minimized = false;
+    }
+  } catch (error) {}
+
+  try {
+    if (!onCurrentDesktop(win) && win.desktops && win.desktops.length > 0) {
+      workspace.currentDesktop = win.desktops[0];
+    }
+  } catch (error) {}
+
+  try {
+    workspace.activeWindow = win;
+  } catch (error) {}
+
+  break;
+}
+`;
 }
