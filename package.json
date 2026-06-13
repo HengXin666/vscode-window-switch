@@ -1,0 +1,140 @@
+{
+  "name": "window-deck",
+  "displayName": "Window Deck",
+  "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
+  "version": "0.1.0",
+  "publisher": "HengXin666",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HengXin666/vscode-window-switch.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "window",
+    "switcher",
+    "workspace",
+    "remote",
+    "navigation"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:windowDeck.showWindows",
+    "onCommand:windowDeck.renameCurrentWindow",
+    "onCommand:windowDeck.setCurrentWindowColor",
+    "onCommand:windowDeck.cleanupStaleWindows",
+    "onCommand:windowDeck.diagnoseFocusSupport"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "windowDeck.showWindows",
+        "title": "Window Deck: Show Windows",
+        "category": "Window Deck",
+        "icon": "$(window)"
+      },
+      {
+        "command": "windowDeck.renameCurrentWindow",
+        "title": "Window Deck: Rename Current Window",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.setCurrentWindowColor",
+        "title": "Window Deck: Set Current Window Color",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.cleanupStaleWindows",
+        "title": "Window Deck: Cleanup Stale Windows",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.diagnoseFocusSupport",
+        "title": "Window Deck: Diagnose Focus Support",
+        "category": "Window Deck"
+      }
+    ],
+    "configuration": {
+      "title": "Window Deck",
+      "properties": {
+        "windowDeck.heartbeatIntervalMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1000,
+          "description": "Interval used to refresh the current VS Code window in the local Window Deck registry."
+        },
+        "windowDeck.staleAfterMs": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 5000,
+          "description": "A window is shown as stale when it has not sent a heartbeat for this long."
+        },
+        "windowDeck.removeStaleAfterMs": {
+          "type": "number",
+          "default": 86400000,
+          "minimum": 60000,
+          "description": "Cleanup command removes stale windows older than this value."
+        },
+        "windowDeck.titleTokenMode": {
+          "type": "string",
+          "enum": [
+            "disabled"
+          ],
+          "default": "disabled",
+          "description": "Reserved for future per-window title token support. Disabled because VS Code exposes window.title as shared configuration."
+        },
+        "windowDeck.applyWorkbenchColors": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, setting a window color also writes workspace workbench.colorCustomizations."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "windowDeck.showWindows"
+        },
+        {
+          "command": "windowDeck.renameCurrentWindow"
+        },
+        {
+          "command": "windowDeck.setCurrentWindowColor"
+        },
+        {
+          "command": "windowDeck.cleanupStaleWindows"
+        },
+        {
+          "command": "windowDeck.diagnoseFocusSupport"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies",
+    "check": "npm run compile && npm run lint"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.1",
+    "@typescript-eslint/parser": "^7.13.1",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.5",
+    "vsce": "^2.15.0"
+  }
+}

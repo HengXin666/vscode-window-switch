@@ -1,0 +1,58 @@
+name: Release VSIX
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Package extension
+        run: npx vsce package --no-dependencies
+
+      - name: Read package version
+        id: package
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          NAME="$(node -p "require('./package.json').name")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix=$NAME-$VERSION.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ steps.package.outputs.tag }}" "$GITHUB_SHA"
+          git push -f origin "${{ steps.package.outputs.tag }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.package.outputs.tag }}
+          name: Window Deck ${{ steps.package.outputs.version }}
+          files: ${{ steps.package.outputs.vsix }}
+          generate_release_notes: true
+          make_latest: true
