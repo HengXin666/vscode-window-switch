@@ -4,6 +4,7 @@ import { Registry } from "./registry";
 import { WindowDeckLayout, WindowRecord } from "./types";
 import { applyStaleState } from "./windowMetadata";
 import { compactPath, relativeAge, titleFromRecord } from "./util";
+import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 
 type PanelActions = {
   focusWindow(windowId: string): Promise<void>;
@@ -68,11 +69,13 @@ export class WindowDeckPanel {
     await this.actions.refreshCurrentWindow();
     const data = await this.registry.read();
     const staleAware = applyStaleState(data.windows, this.staleAfterMs(), this.currentWindowId());
-    const ordered = orderWindows(staleAware, data.layout.order);
+    const visible = visibleWindowRecords(staleAware);
+    const layout = normalizeVisibleLayout(data.layout, visible);
+    const ordered = orderVisibleRecords(visible, layout);
     await this.panel.webview.postMessage({
       type: "windows",
       windows: ordered.map(toViewModel),
-      layout: data.layout,
+      layout,
       currentWindowId: this.currentWindowId()
     });
   }
@@ -95,21 +98,6 @@ export class WindowDeckPanel {
   }
 }
 
-function orderWindows(windows: WindowRecord[], order: string[]): WindowRecord[] {
-  const index = new Map(order.map((windowId, position) => [windowId, position]));
-  return [...windows].sort((a, b) => {
-    const aIndex = index.get(a.windowId) ?? Number.MAX_SAFE_INTEGER;
-    const bIndex = index.get(b.windowId) ?? Number.MAX_SAFE_INTEGER;
-    if (aIndex !== bIndex) {
-      return aIndex - bIndex;
-    }
-    if (a.state.stale !== b.state.stale) {
-      return a.state.stale ? 1 : -1;
-    }
-    return (b.state.lastFocusedAt ?? b.state.lastSeenAt) - (a.state.lastFocusedAt ?? a.state.lastSeenAt);
-  });
-}
-
 function renderShell(): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -117,10 +105,7 @@ function renderShell(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    :root {
-      color-scheme: light dark;
-      --radius: 6px;
-    }
+    :root { color-scheme: light dark; --radius: 6px; }
     body {
       margin: 0;
       color: var(--vscode-foreground);
@@ -128,115 +113,110 @@ function renderShell(): string {
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
     }
-    .toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 2;
+    .surface {
+      width: min(620px, calc(100vw - 24px));
+      margin: 12px auto;
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: var(--radius);
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+      overflow: hidden;
+    }
+    .head {
       display: flex;
       align-items: center;
-      gap: 10px;
       min-height: 34px;
       padding: 0 10px;
-      border-bottom: 1px solid var(--vscode-editorGroup-border);
-      background: var(--vscode-editor-background);
-    }
-    .title {
+      border-bottom: 1px solid var(--vscode-widget-border);
+      background: var(--vscode-sideBar-background);
       font-weight: 600;
     }
-    .hint {
-      color: var(--vscode-descriptionForeground);
-      font-size: 12px;
-    }
-    .deck {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 10px;
-      overflow-x: auto;
-      min-height: 96px;
-    }
-    .tab, .group {
-      flex: 0 0 auto;
-    }
-    .tab {
+    .list { max-height: calc(100vh - 90px); overflow: auto; padding: 6px; }
+    .section { padding: 6px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; }
+    .row {
       display: grid;
-      grid-template-columns: 10px minmax(90px, 1fr) auto;
-      gap: 7px;
+      grid-template-columns: 12px minmax(0, 1fr) auto;
+      gap: 8px;
       align-items: center;
-      width: 220px;
-      min-height: 34px;
+      min-height: 32px;
       padding: 5px 7px;
-      border: 1px solid var(--tab-color);
-      border-left-width: 4px;
-      border-radius: var(--radius);
-      background: var(--vscode-tab-inactiveBackground);
+      margin: 2px 0;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
       cursor: pointer;
       user-select: none;
     }
-    .tab.current {
+    .row:hover { background: var(--vscode-list-hoverBackground); }
+    .row.current {
       border-color: var(--vscode-focusBorder);
-      background: var(--vscode-tab-activeBackground);
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
     }
-    .tab.stale {
-      opacity: 0.62;
-      border-style: dashed;
+    .row.stale { opacity: .62; }
+    .row.drop-before { box-shadow: 0 -2px 0 var(--vscode-focusBorder); }
+    .row.drop-merge { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    .box {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      border: 1px solid color-mix(in srgb, var(--item-color), #000 18%);
+      background: var(--item-color);
+      box-sizing: border-box;
     }
-    .tab.drop-before {
-      box-shadow: -3px 0 0 var(--vscode-focusBorder);
-    }
-    .tab.drop-merge {
-      outline: 2px solid var(--vscode-focusBorder);
-      outline-offset: 2px;
-    }
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: var(--tab-color);
-    }
-    .alias {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: inherit;
-      font-weight: 600;
-    }
-    .actions {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
+    .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
     .icon {
-      width: 18px;
-      height: 18px;
+      width: 22px;
+      height: 22px;
       border: 0;
       border-radius: 4px;
       color: inherit;
       background: transparent;
       cursor: pointer;
+      line-height: 20px;
     }
-    .icon:hover {
-      background: var(--vscode-toolbar-hoverBackground);
+    .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .group {
+      margin: 3px 0;
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: 5px;
+      overflow: hidden;
+      background: var(--vscode-dropdown-background);
     }
+    .group.drop-before { box-shadow: 0 -2px 0 var(--vscode-focusBorder); }
+    .group.drop-into { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    .group-head {
+      display: grid;
+      grid-template-columns: 18px 12px minmax(0, 1fr) auto;
+      gap: 7px;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 7px;
+      background: var(--vscode-sideBar-background);
+      cursor: pointer;
+      user-select: none;
+    }
+    .group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .group.collapsed .group-body { display: none; }
+    .group-body { padding: 3px 4px 4px; }
     .menu {
-      display: none;
       position: fixed;
-      z-index: 5;
-      min-width: 170px;
+      z-index: 10;
+      display: none;
+      min-width: 188px;
       padding: 5px;
       border: 1px solid var(--vscode-widget-border);
       border-radius: var(--radius);
       background: var(--vscode-dropdown-background);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
     }
-    .menu.open {
-      display: block;
-    }
-    .menu-item {
+    .menu.open { display: block; }
+    .menu button {
       display: block;
       width: 100%;
-      min-height: 26px;
+      min-height: 27px;
       padding: 4px 8px;
       border: 0;
       border-radius: 4px;
@@ -245,85 +225,34 @@ function renderShell(): string {
       text-align: left;
       cursor: pointer;
     }
-    .menu-item:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-    .palette {
-      display: grid;
-      grid-template-columns: repeat(8, 18px);
-      gap: 5px;
-      padding: 6px 4px 3px;
-    }
+    .menu button:hover { background: var(--vscode-list-hoverBackground); }
+    .palette { display: grid; grid-template-columns: repeat(8, 18px); gap: 5px; padding: 6px 4px 3px; }
     .swatch {
-      width: 18px;
-      height: 18px;
-      border-radius: 4px;
-      border: 1px solid var(--vscode-contrastBorder);
-      background: var(--swatch);
-      cursor: pointer;
+      width: 18px !important;
+      min-height: 18px !important;
+      padding: 0 !important;
+      border: 1px solid var(--vscode-contrastBorder) !important;
+      border-radius: 3px !important;
+      background: var(--swatch) !important;
     }
-    .group {
-      min-width: 250px;
-      max-width: 520px;
-      border: 1px solid var(--vscode-editorGroup-border);
-      border-radius: var(--radius);
-      background: var(--vscode-sideBar-background);
-    }
-    .group.drop-before {
-      box-shadow: -3px 0 0 var(--vscode-focusBorder);
-    }
-    .group-head {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      min-height: 32px;
-      padding: 4px 7px;
-      cursor: pointer;
-      user-select: none;
-    }
-    .group-title {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-weight: 600;
-    }
-    .group-items {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      padding: 7px;
-      border-top: 1px solid var(--vscode-editorGroup-border);
-    }
-    .group.collapsed .group-items {
-      display: none;
-    }
-    .group .tab {
-      width: 218px;
-    }
-    .empty {
-      color: var(--vscode-descriptionForeground);
-      padding: 14px;
-    }
+    .empty { padding: 14px; color: var(--vscode-descriptionForeground); }
   </style>
 </head>
 <body>
-  <div class="toolbar">
-    <span class="title">Window Deck</span>
-    <span class="hint">左键切换/重新打开；右键重命名、改色、删除；拖拽排序，拖到另一个标签上创建分组。</span>
-  </div>
-  <div class="deck" id="deck"></div>
-  <div class="menu" id="contextMenu"></div>
+  <main class="surface">
+    <div class="head">Window Deck</div>
+    <div class="list" id="deck"></div>
+  </main>
+  <div class="menu" id="menu"></div>
   <script>
     const vscode = acquireVsCodeApi();
-    const colors = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
+    const COLORS = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
     const deck = document.getElementById("deck");
-    const contextMenu = document.getElementById("contextMenu");
+    const menu = document.getElementById("menu");
     let windows = [];
     let layout = { order: [], groups: [] };
     let currentWindowId = "";
-    let draggedWindowId = "";
+    let dragState = null;
 
     window.addEventListener("message", (event) => {
       if (event.data.type !== "windows") return;
@@ -332,203 +261,210 @@ function renderShell(): string {
       currentWindowId = event.data.currentWindowId || "";
       render();
     });
-
     document.addEventListener("click", (event) => {
-      if (!event.target.closest("#contextMenu")) {
-        contextMenu.classList.remove("open");
-      }
-    });
+      if (!event.target.closest("#menu")) menu.classList.remove("open");
+    }, true);
 
     function render() {
-      const grouped = new Set(layout.groups.flatMap((group) => group.windowIds));
+      layout = normalizeLayout(layout);
+      const active = renderSection(false);
+      const stale = renderSection(true);
+      deck.innerHTML = active + stale || '<div class="empty">没有已注册的工作区窗口。</div>';
+      bind(deck);
+    }
+
+    function renderSection(stale) {
+      const entries = buildEntries(stale);
+      if (!entries.length) return "";
+      return '<div class="section">' + (stale ? "历史关闭" : "已打开") + '</div>' + entries.join("");
+    }
+
+    function buildEntries(stale) {
       const byId = new Map(windows.map((item) => [item.windowId, item]));
-      const parts = [];
+      const grouped = new Set(layout.groups.flatMap((group) => group.windowIds));
+      const out = [];
       for (const id of layout.order) {
         const group = layout.groups.find((item) => item.windowIds[0] === id);
         if (group) {
-          parts.push(renderGroup(group, byId));
+          const items = group.windowIds.map((windowId) => byId.get(windowId)).filter(Boolean);
+          if (items.length && items.every((item) => item.stale) === stale) out.push(renderGroup(group, items));
           continue;
         }
-        if (!grouped.has(id) && byId.has(id)) {
-          parts.push(renderTab(byId.get(id)));
-        }
+        const item = byId.get(id);
+        if (item && !grouped.has(id) && item.stale === stale) out.push(renderRow(item));
       }
-      for (const item of windows) {
-        if (!layout.order.includes(item.windowId) && !grouped.has(item.windowId)) {
-          parts.push(renderTab(item));
-        }
-      }
-      deck.innerHTML = parts.length ? parts.join("") : '<div class="empty">还没有注册的 VS Code 窗口。</div>';
-      bindEvents();
+      return out;
     }
 
-    function renderGroup(group, byId) {
-      const visible = group.windowIds.map((id) => byId.get(id)).filter(Boolean);
-      const title = group.title || visible.map((item) => item.title).join(" / ") || "分组";
-      return '<section class="group ' + (group.collapsed ? "collapsed" : "") + '" draggable="true" data-group-id="' + escapeHtml(group.id) + '">' +
-        '<div class="group-head">' +
-        '<button class="icon collapse" title="折叠/展开" data-group-id="' + escapeHtml(group.id) + '">' + (group.collapsed ? "›" : "⌄") + '</button>' +
-        '<span class="dot" style="--tab-color:' + escapeHtml(group.color || "#4f8cff") + '"></span>' +
-        '<span class="group-title">' + escapeHtml(title) + '</span>' +
-        '<button class="icon ungroup" title="取消分组" data-group-id="' + escapeHtml(group.id) + '">×</button>' +
-        '</div>' +
-        '<div class="group-items">' + visible.map(renderTab).join("") + '</div>' +
-        '</section>';
+    function renderGroup(group, items) {
+      const title = group.title || items.map((item) => item.title).join(" / ") || "分组";
+      const color = group.color || (items[0] && items[0].color) || "#4f8cff";
+      const sorted = [...items].sort((a, b) => Number(a.stale) - Number(b.stale));
+      return '<section class="group ' + (group.collapsed ? "collapsed" : "") + '" data-group-id="' + esc(group.id) + '">' +
+        '<div class="group-head" draggable="true" data-group-id="' + esc(group.id) + '">' +
+        '<button class="icon" data-collapse="' + esc(group.id) + '">' + (group.collapsed ? "›" : "⌄") + '</button>' +
+        '<span class="box" style="--item-color:' + esc(color) + '"></span>' +
+        '<span class="group-title">' + esc(title) + '</span>' +
+        '<button class="icon" data-ungroup="' + esc(group.id) + '">×</button>' +
+        '</div><div class="group-body">' + sorted.map(renderRow).join("") + '</div></section>';
     }
 
-    function renderTab(record) {
-      const classes = ["tab", record.windowId === currentWindowId ? "current" : "", record.stale ? "stale" : ""].filter(Boolean).join(" ");
-      return '<div class="' + classes + '" draggable="true" data-window-id="' + escapeHtml(record.windowId) + '">' +
-        '<span class="dot" style="--tab-color:' + escapeHtml(record.color) + '"></span>' +
-        '<span class="alias" title="' + escapeHtml(record.meta) + '">#' + escapeHtml(record.title) + '</span>' +
-        '<span class="actions">' +
-        (record.stale ? '<button class="icon close" title="删除记录" data-window-id="' + escapeHtml(record.windowId) + '">×</button>' : '') +
-        '</span>' +
-        '</div>';
+    function renderRow(item) {
+      const classes = ["row", item.windowId === currentWindowId ? "current" : "", item.stale ? "stale" : ""].filter(Boolean).join(" ");
+      return '<div draggable="true" class="' + classes + '" data-window-id="' + esc(item.windowId) + '" style="--item-color:' + esc(item.color) + '">' +
+        '<span class="box"></span><span class="title">' + esc(item.title) + '<span class="meta">' + esc(item.meta) + '</span></span>' +
+        '<span>' + (item.stale ? '<button class="icon" data-remove="' + esc(item.windowId) + '">×</button>' : "") + '</span></div>';
     }
 
-    function bindEvents() {
-      document.querySelectorAll(".tab").forEach((tab) => {
-        tab.addEventListener("click", (event) => {
-          if (event.target.closest("input") || event.target.closest("button")) return;
-          const record = findWindow(tab.dataset.windowId);
-          vscode.postMessage({ type: record && record.stale ? "open" : "focus", windowId: tab.dataset.windowId });
+    function bind(scope) {
+      scope.querySelectorAll(".row").forEach((row) => {
+        row.addEventListener("click", (event) => {
+          if (event.target.closest("button")) return;
+          const item = findWindow(row.dataset.windowId);
+          vscode.postMessage({ type: item && item.stale ? "open" : "focus", windowId: row.dataset.windowId });
         });
-        tab.addEventListener("contextmenu", (event) => {
+        row.addEventListener("contextmenu", (event) => {
           event.preventDefault();
-          showContextMenu(tab.dataset.windowId, event.clientX, event.clientY);
+          showWindowMenu(row.dataset.windowId, event.clientX, event.clientY);
         });
-        tab.addEventListener("dragstart", (event) => {
-          draggedWindowId = tab.dataset.windowId;
+        row.addEventListener("dragstart", (event) => {
+          dragState = { type: "window", windowId: row.dataset.windowId };
           event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", row.dataset.windowId);
         });
-        tab.addEventListener("dragover", (event) => {
-          if (!draggedWindowId || draggedWindowId === tab.dataset.windowId) return;
+        row.addEventListener("dragover", (event) => {
+          if (!dragState || dragState.windowId === row.dataset.windowId) return;
           event.preventDefault();
-          tab.classList.toggle("drop-merge", event.offsetX > tab.clientWidth * 0.35 && event.offsetX < tab.clientWidth * 0.75);
-          tab.classList.toggle("drop-before", event.offsetX <= tab.clientWidth * 0.35);
+          const merge = event.offsetX > row.clientWidth * 0.35 && event.offsetX < row.clientWidth * 0.75;
+          row.classList.toggle("drop-merge", merge);
+          row.classList.toggle("drop-before", !merge);
         });
-        tab.addEventListener("dragleave", () => {
-          tab.classList.remove("drop-merge", "drop-before");
-        });
-        tab.addEventListener("drop", (event) => {
+        row.addEventListener("dragleave", () => row.classList.remove("drop-merge", "drop-before"));
+        row.addEventListener("drop", (event) => {
           event.preventDefault();
-          const targetWindowId = tab.dataset.windowId;
-          const merge = event.offsetX > tab.clientWidth * 0.35 && event.offsetX < tab.clientWidth * 0.75;
-          tab.classList.remove("drop-merge", "drop-before");
-          if (merge) mergeWindows(draggedWindowId, targetWindowId);
-          else moveBefore(draggedWindowId, targetWindowId);
-          draggedWindowId = "";
+          event.stopPropagation();
+          const merge = event.offsetX > row.clientWidth * 0.35 && event.offsetX < row.clientWidth * 0.75;
+          if (dragState.type === "group") moveGroupBeforeWindow(dragState.groupId, row.dataset.windowId);
+          else if (merge) mergeWindows(dragState.windowId, row.dataset.windowId);
+          else moveBefore(dragState.windowId, row.dataset.windowId);
+          dragState = null;
           saveLayout();
-          render();
         });
       });
-      document.querySelectorAll(".group").forEach((group) => {
-        group.addEventListener("dragstart", (event) => {
-          event.dataTransfer.effectAllowed = "move";
-          draggedWindowId = firstWindowInGroup(group.dataset.groupId);
+      scope.querySelectorAll(".group").forEach((group) => {
+        group.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          showGroupMenu(group.dataset.groupId, event.clientX, event.clientY);
         });
         group.addEventListener("dragover", (event) => {
-          if (!draggedWindowId) return;
+          if (!dragState) return;
           event.preventDefault();
-          group.classList.add("drop-before");
+          group.classList.add("drop-into");
         });
-        group.addEventListener("dragleave", () => group.classList.remove("drop-before"));
+        group.addEventListener("dragleave", () => group.classList.remove("drop-into"));
         group.addEventListener("drop", (event) => {
+          if (!dragState) return;
           event.preventDefault();
-          group.classList.remove("drop-before");
-          moveBefore(draggedWindowId, firstWindowInGroup(group.dataset.groupId));
-          draggedWindowId = "";
+          event.stopPropagation();
+          group.classList.remove("drop-into");
+          if (dragState.type === "window") addWindowToGroup(dragState.windowId, group.dataset.groupId);
+          else moveGroupBefore(dragState.groupId, group.dataset.groupId);
+          dragState = null;
           saveLayout();
-          render();
         });
       });
-      document.querySelectorAll(".close").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          removeFromLayout(button.dataset.windowId);
-          vscode.postMessage({ type: "remove", windowId: button.dataset.windowId });
-          render();
+      scope.querySelectorAll(".group-head").forEach((head) => {
+        head.addEventListener("dragstart", (event) => {
+          dragState = { type: "group", groupId: head.dataset.groupId };
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", firstWindowInGroup(head.dataset.groupId));
         });
       });
-      document.querySelectorAll(".collapse").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          const group = layout.groups.find((item) => item.id === button.dataset.groupId);
-          if (group) group.collapsed = !group.collapsed;
-          saveLayout();
-          render();
-        });
-      });
-      document.querySelectorAll(".ungroup").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          const group = layout.groups.find((item) => item.id === button.dataset.groupId);
-          layout.groups = layout.groups.filter((item) => item.id !== button.dataset.groupId);
-          if (group) {
-            const insertAt = Math.max(0, layout.order.indexOf(group.windowIds[0]));
-            layout.order = layout.order.filter((id) => !group.windowIds.includes(id));
-            layout.order.splice(insertAt, 0, ...group.windowIds);
-          }
-          saveLayout();
-          render();
-        });
+      scope.querySelectorAll("[data-collapse]").forEach((button) => button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const group = layout.groups.find((item) => item.id === button.dataset.collapse);
+        if (group) group.collapsed = !group.collapsed;
+        saveLayout();
+      }));
+      scope.querySelectorAll("[data-ungroup]").forEach((button) => button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        ungroup(button.dataset.ungroup);
+        saveLayout();
+      }));
+      scope.querySelectorAll("[data-remove]").forEach((button) => button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        removeFromLayout(button.dataset.remove);
+        vscode.postMessage({ type: "remove", windowId: button.dataset.remove });
+      }));
+    }
+
+    function showWindowMenu(windowId, x, y) {
+      const item = findWindow(windowId);
+      menu.innerHTML = '<button data-cmd="rename">重命名标题</button><button data-cmd="remove">删除记录</button><div class="palette">' +
+        COLORS.map((color) => '<button class="swatch" title="' + esc(color) + '" data-color="' + esc(color) + '" style="--swatch:' + esc(color) + '"></button>').join("") +
+        '</div>';
+      placeMenu(x, y);
+      menu.querySelector('[data-cmd="rename"]').onclick = () => {
+        menu.classList.remove("open");
+        const alias = prompt("窗口标题", item ? item.title : "");
+        if (alias !== null) vscode.postMessage({ type: "rename", windowId, alias: alias.trim() });
+      };
+      menu.querySelector('[data-cmd="remove"]').onclick = () => {
+        menu.classList.remove("open");
+        removeFromLayout(windowId);
+        vscode.postMessage({ type: "remove", windowId });
+      };
+      menu.querySelectorAll("[data-color]").forEach((button) => button.onclick = () => {
+        menu.classList.remove("open");
+        vscode.postMessage({ type: "color", windowId, color: button.dataset.color });
       });
     }
 
-    function showContextMenu(windowId, x, y) {
-      const record = findWindow(windowId);
-      contextMenu.innerHTML =
-        '<button class="menu-item rename" data-window-id="' + escapeHtml(windowId) + '">重命名</button>' +
-        '<button class="menu-item remove" data-window-id="' + escapeHtml(windowId) + '">删除记录</button>' +
-        '<div class="palette">' + colors.map((color) =>
-          '<button class="swatch" title="' + escapeHtml(color) + '" style="--swatch:' + escapeHtml(color) + '" data-window-id="' + escapeHtml(windowId) + '" data-color="' + escapeHtml(color) + '"></button>'
-        ).join("") + '</div>';
-      contextMenu.style.left = Math.min(x, window.innerWidth - 190) + "px";
-      contextMenu.style.top = Math.min(y, window.innerHeight - 160) + "px";
-      contextMenu.classList.add("open");
-      contextMenu.querySelector(".rename").addEventListener("click", (event) => {
-        event.stopPropagation();
-        contextMenu.classList.remove("open");
-        const alias = prompt("窗口名称", record ? record.title : "");
-        if (alias !== null) {
-          vscode.postMessage({ type: "rename", windowId, alias: alias.trim() });
+    function showGroupMenu(groupId, x, y) {
+      const group = layout.groups.find((item) => item.id === groupId);
+      menu.innerHTML = '<button data-cmd="rename">重命名分组</button><button data-cmd="collapse">展开/合上</button><button data-cmd="ungroup">取消分组</button>';
+      placeMenu(x, y);
+      menu.querySelector('[data-cmd="rename"]').onclick = () => {
+        menu.classList.remove("open");
+        const title = prompt("分组标题", group ? group.title : "分组");
+        if (title !== null && group) {
+          group.title = title.trim() || "分组";
+          saveLayout();
         }
-      });
-      contextMenu.querySelector(".remove").addEventListener("click", (event) => {
-        event.stopPropagation();
-        contextMenu.classList.remove("open");
-        removeFromLayout(windowId);
-        vscode.postMessage({ type: "remove", windowId });
-        render();
-      });
-      contextMenu.querySelectorAll(".swatch").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          vscode.postMessage({ type: "color", windowId: button.dataset.windowId, color: button.dataset.color });
-          const item = findWindow(button.dataset.windowId);
-          if (item) item.color = button.dataset.color;
-          contextMenu.classList.remove("open");
-          render();
-        });
-      });
+      };
+      menu.querySelector('[data-cmd="collapse"]').onclick = () => {
+        menu.classList.remove("open");
+        if (group) group.collapsed = !group.collapsed;
+        saveLayout();
+      };
+      menu.querySelector('[data-cmd="ungroup"]').onclick = () => {
+        menu.classList.remove("open");
+        ungroup(groupId);
+        saveLayout();
+      };
+    }
+
+    function placeMenu(x, y) {
+      menu.style.left = Math.min(x, window.innerWidth - 205) + "px";
+      menu.style.top = Math.min(y, window.innerHeight - 170) + "px";
+      menu.classList.add("open");
     }
 
     function normalizeLayout(next) {
       const ids = windows.map((item) => item.windowId);
+      const known = new Set(ids);
       const seen = new Set();
-      const order = (next.order || []).filter((id) => ids.includes(id) && !seen.has(id) && seen.add(id));
+      const order = (next.order || []).filter((id) => known.has(id) && !seen.has(id) && seen.add(id));
       ids.forEach((id) => { if (!seen.has(id)) order.push(id); });
       const groups = (next.groups || []).map((group) => ({
         id: group.id,
         title: group.title || "分组",
         color: group.color,
         collapsed: Boolean(group.collapsed),
-        windowIds: (group.windowIds || []).filter((id) => ids.includes(id))
+        windowIds: dedupe(group.windowIds || []).filter((id) => known.has(id))
       })).filter((group) => group.windowIds.length > 0);
       return { order, groups };
     }
-
     function moveBefore(sourceId, targetId) {
       if (!sourceId || !targetId || sourceId === targetId) return;
       removeFromGroups(sourceId);
@@ -536,62 +472,82 @@ function renderShell(): string {
       const index = Math.max(0, layout.order.indexOf(targetId));
       layout.order.splice(index, 0, sourceId);
     }
-
     function mergeWindows(sourceId, targetId) {
       if (!sourceId || !targetId || sourceId === targetId) return;
       const existing = layout.groups.find((group) => group.windowIds.includes(targetId));
       removeFromGroups(sourceId);
-      if (existing) {
-        existing.windowIds = [...new Set([...existing.windowIds, sourceId])];
-      } else {
+      if (existing) existing.windowIds = dedupe([...existing.windowIds, sourceId]);
+      else {
         const source = findWindow(sourceId);
         const target = findWindow(targetId);
-        const group = {
+        layout.groups.push({
           id: "group-" + Date.now().toString(36),
-          title: [target && target.title, source && source.title].filter(Boolean).join(" / "),
+          title: [target && target.title, source && source.title].filter(Boolean).join(" / ") || "分组",
           color: target && target.color,
           collapsed: false,
           windowIds: [targetId, sourceId]
-        };
-        layout.groups.push(group);
+        });
       }
       layout.order = layout.order.filter((id) => id !== sourceId);
       if (!layout.order.includes(targetId)) layout.order.push(targetId);
     }
-
-    function removeFromGroups(windowId) {
-      layout.groups = layout.groups.map((group) => ({
-        ...group,
-        windowIds: group.windowIds.filter((id) => id !== windowId)
-      })).filter((group) => group.windowIds.length > 0);
+    function addWindowToGroup(windowId, groupId) {
+      const group = layout.groups.find((item) => item.id === groupId);
+      if (!windowId || !group || group.windowIds.includes(windowId)) return;
+      removeFromGroups(windowId);
+      group.windowIds.push(windowId);
+      group.collapsed = false;
+      layout.order = layout.order.filter((id) => id !== windowId);
     }
-
+    function moveGroupBefore(sourceGroupId, targetGroupId) {
+      if (!sourceGroupId || !targetGroupId || sourceGroupId === targetGroupId) return;
+      const sourceFirst = firstWindowInGroup(sourceGroupId);
+      const targetFirst = firstWindowInGroup(targetGroupId);
+      if (!sourceFirst || !targetFirst) return;
+      layout.order = layout.order.filter((id) => id !== sourceFirst);
+      const index = Math.max(0, layout.order.indexOf(targetFirst));
+      layout.order.splice(index, 0, sourceFirst);
+    }
+    function moveGroupBeforeWindow(sourceGroupId, targetWindowId) {
+      if (!sourceGroupId || !targetWindowId) return;
+      const sourceFirst = firstWindowInGroup(sourceGroupId);
+      if (!sourceFirst || sourceFirst === targetWindowId) return;
+      layout.order = layout.order.filter((id) => id !== sourceFirst);
+      const index = Math.max(0, layout.order.indexOf(targetWindowId));
+      layout.order.splice(index, 0, sourceFirst);
+    }
+    function removeFromGroups(windowId) {
+      layout.groups = layout.groups.map((group) => ({ ...group, windowIds: group.windowIds.filter((id) => id !== windowId) })).filter((group) => group.windowIds.length > 0);
+    }
     function removeFromLayout(windowId) {
       layout.order = layout.order.filter((id) => id !== windowId);
       removeFromGroups(windowId);
       saveLayout();
     }
-
+    function ungroup(groupId) {
+      const group = layout.groups.find((item) => item.id === groupId);
+      layout.groups = layout.groups.filter((item) => item.id !== groupId);
+      if (!group) return;
+      const at = Math.max(0, layout.order.indexOf(group.windowIds[0]));
+      layout.order = layout.order.filter((id) => !group.windowIds.includes(id));
+      layout.order.splice(at, 0, ...group.windowIds);
+    }
     function firstWindowInGroup(groupId) {
       const group = layout.groups.find((item) => item.id === groupId);
       return group && group.windowIds[0] || "";
     }
-
-    function findWindow(windowId) {
-      return windows.find((item) => item.windowId === windowId);
-    }
-
     function saveLayout() {
       layout = normalizeLayout(layout);
       vscode.postMessage({ type: "layout", layout });
+      render();
     }
-
-    function escapeHtml(value) {
-      return String(value || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+    function findWindow(windowId) { return windows.find((item) => item.windowId === windowId); }
+    function dedupe(values) {
+      const seen = new Set();
+      return values.filter((value) => !seen.has(value) && seen.add(value));
+    }
+    function esc(value) {
+      return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
   </script>
 </body>
@@ -600,7 +556,7 @@ function renderShell(): string {
 
 function toViewModel(record: WindowRecord): Record<string, string | boolean> {
   const title = titleFromRecord(record.alias, record.workspaceName);
-  const meta = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, record.state.stale ? "已失联" : `活跃于 ${relativeAge(record.state.lastSeenAt)}`]
+  const meta = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, record.state.stale ? "历史" : relativeAge(record.state.lastSeenAt)]
     .filter(Boolean)
     .join(" · ");
   return {
@@ -608,7 +564,12 @@ function toViewModel(record: WindowRecord): Record<string, string | boolean> {
     title,
     color: record.color ?? "#4f8cff",
     meta,
-    stale: record.state.stale
+    stale: record.state.stale,
+    active: record.state.active,
+    workspaceKind: record.workspaceKind,
+    workspaceUri: record.workspaceUri ?? "",
+    remoteKind: record.remote.kind,
+    branch: record.git?.branch ?? ""
   };
 }
 

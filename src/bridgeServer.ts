@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { Registry } from "./registry";
 import { WindowDeckLayout, WindowRecord } from "./types";
 import { applyStaleState } from "./windowMetadata";
+import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 
 type BridgeActions = {
   focusWindow(windowId: string): Promise<void>;
@@ -65,10 +66,12 @@ export class BridgeServer implements vscode.Disposable {
       if (request.method === "GET" && url.pathname === "/state") {
         await this.actions.refreshCurrentWindow();
         const data = await this.registry.read();
-        const windows = orderWindows(applyStaleState(data.windows, this.staleAfterMs(), this.currentWindowId()), data.layout.order);
+        const visible = visibleWindowRecords(applyStaleState(data.windows, this.staleAfterMs(), this.currentWindowId()));
+        const layout = normalizeVisibleLayout(data.layout, visible);
+        const windows = orderVisibleRecords(visible, layout);
         this.json(response, {
           currentWindowId: this.currentWindowId(),
-          layout: data.layout,
+          layout,
           windows: windows.map(toBridgeRecord)
         });
         return;
@@ -121,27 +124,13 @@ function readBody(request: http.IncomingMessage): Promise<string> {
   });
 }
 
-function orderWindows(windows: WindowRecord[], order: string[]): WindowRecord[] {
-  const index = new Map(order.map((windowId, position) => [windowId, position]));
-  return [...windows].sort((a, b) => {
-    const aIndex = index.get(a.windowId) ?? Number.MAX_SAFE_INTEGER;
-    const bIndex = index.get(b.windowId) ?? Number.MAX_SAFE_INTEGER;
-    if (aIndex !== bIndex) {
-      return aIndex - bIndex;
-    }
-    if (a.state.stale !== b.state.stale) {
-      return a.state.stale ? 1 : -1;
-    }
-    return (b.state.lastFocusedAt ?? b.state.lastSeenAt) - (a.state.lastFocusedAt ?? a.state.lastSeenAt);
-  });
-}
-
 function toBridgeRecord(record: WindowRecord): Record<string, unknown> {
   return {
     windowId: record.windowId,
-    title: record.alias || record.workspaceName || "空窗口",
+    title: record.alias || record.workspaceName || "Workspace",
     color: record.color ?? "#4f8cff",
     stale: record.state.stale,
+    active: record.state.active,
     workspaceKind: record.workspaceKind,
     workspaceUri: record.workspaceUri,
     remoteKind: record.remote.kind,

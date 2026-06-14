@@ -5,7 +5,7 @@ import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord } from "./types";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
-import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
+import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, titleFromRecord } from "./util";
 import { WindowDeckPanel } from "./windowDeckPanel";
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -137,26 +137,7 @@ async function heartbeat(): Promise<void> {
 
 async function showWindows(): Promise<void> {
   await heartbeat();
-  const staleAfterMs = getConfigNumber("staleAfterMs") || 20000;
-  const data = await registry.read();
-  const windows = applyStaleState(data.windows, staleAfterMs, currentWindowId).sort(compareWindows);
-  const items = windows.map((record) => toQuickPickItem(record));
-  const selected = await vscode.window.showQuickPick(items, {
-    title: "Window Deck",
-    placeHolder: "选择窗口切换；失联窗口会尝试重新打开"
-  });
-  if (!selected) {
-    return;
-  }
-  if (selected.record.windowId === currentWindowId) {
-    return;
-  }
-  if (selected.record.state.stale) {
-    await openWindow(selected.record.windowId);
-  } else {
-    const result = await focusWindow(selected.record);
-    await handleFocusResult(selected.record.windowId, result);
-  }
+  await deckPanel?.show();
 }
 
 async function renameCurrentWindow(): Promise<void> {
@@ -377,23 +358,6 @@ async function applyWorkbenchColor(color: string): Promise<void> {
   );
 }
 
-type WindowQuickPickItem = vscode.QuickPickItem & { record: WindowRecord };
-
-function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
-  const title = titleFromRecord(record.alias, record.workspaceName);
-  const dot = record.state.stale ? "○" : "●";
-  const current = record.windowId === currentWindowId ? "当前" : undefined;
-  const stale = record.state.stale ? "失联" : undefined;
-  const branch = record.git?.branch;
-  const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), branch, current, stale, `活跃于 ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
-  return {
-    label: `${dot} ${title}`,
-    description: [record.color, record.windowId === currentWindowId ? "选择后配置" : undefined].filter(Boolean).join(" · "),
-    detail: detailParts.join(" · "),
-    record
-  };
-}
-
 function colorName(color: string): string {
   const names: Record<string, string> = {
     "#4f8cff": "蓝色",
@@ -429,19 +393,6 @@ function authorityName(authority?: string): string {
     return "unknown";
   }
   return authority.split("+").pop() ?? authority;
-}
-
-function compareWindows(a: WindowRecord, b: WindowRecord): number {
-  if (a.windowId === currentWindowId) {
-    return -1;
-  }
-  if (b.windowId === currentWindowId) {
-    return 1;
-  }
-  if (a.state.stale !== b.state.stale) {
-    return a.state.stale ? 1 : -1;
-  }
-  return (b.state.lastFocusedAt ?? b.state.lastSeenAt) - (a.state.lastFocusedAt ?? a.state.lastSeenAt);
 }
 
 function shellQuote(value: string): string {
