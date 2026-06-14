@@ -5,14 +5,14 @@ import { Registry } from "./registry";
 import { WindowRecord } from "./types";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
 import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
-import { WindowDeckViewProvider } from "./windowDeckView";
+import { WindowDeckPanel } from "./windowDeckPanel";
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let registry: Registry;
 let currentWindowId: string;
 let currentTitleToken: string;
-let deckViewProvider: WindowDeckViewProvider | undefined;
+let deckPanel: WindowDeckPanel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   registry = new Registry(registryDirectory(context));
@@ -22,9 +22,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   await ensureTitleToken();
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.command = "windowDeck.showWindows";
+  statusBarItem.command = "windowDeck.openPanel";
   context.subscriptions.push(statusBarItem);
-  deckViewProvider = new WindowDeckViewProvider(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
+  deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
     renameWindow,
     setWindowColor,
@@ -32,7 +32,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(WindowDeckViewProvider.viewType, deckViewProvider),
+    vscode.commands.registerCommand("windowDeck.openPanel", openPanel),
     vscode.commands.registerCommand("windowDeck.showWindows", showWindows),
     vscode.commands.registerCommand("windowDeck.renameCurrentWindow", renameCurrentWindow),
     vscode.commands.registerCommand("windowDeck.setCurrentWindowColor", setCurrentWindowColor),
@@ -75,6 +75,10 @@ export async function deactivate(): Promise<void> {
   }
 }
 
+async function openPanel(): Promise<void> {
+  await deckPanel?.show();
+}
+
 async function heartbeat(): Promise<void> {
   const staleAfterMs = getConfigNumber("staleAfterMs") || 20000;
   const data = await registry.read();
@@ -92,7 +96,7 @@ async function showWindows(): Promise<void> {
   const items = windows.map((record) => toQuickPickItem(record));
   const selected = await vscode.window.showQuickPick(items, {
     title: "Window Deck",
-    placeHolder: "Select a VS Code window to focus"
+    placeHolder: "选择要切换到的 VS Code 窗口"
   });
   if (!selected) {
     return;
@@ -109,8 +113,8 @@ async function renameCurrentWindow(): Promise<void> {
   const data = await registry.read();
   const current = data.windows.find((record) => record.windowId === currentWindowId);
   const alias = await vscode.window.showInputBox({
-    title: "Window Deck: Rename Current Window",
-    prompt: "Alias is stored in Window Deck global storage, not in the workspace.",
+    title: "Window Deck：重命名当前窗口",
+    prompt: "别名存储在 Window Deck 全局存储中，不会写入项目文件。",
     value: current?.alias ?? current?.workspaceName ?? ""
   });
   if (alias === undefined) {
@@ -122,8 +126,8 @@ async function renameCurrentWindow(): Promise<void> {
 async function setCurrentWindowColor(): Promise<void> {
   const palette = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
   const picked = await vscode.window.showQuickPick(
-    palette.map((color) => ({ label: color, description: "Window Deck UI color", detail: colorName(color) })),
-    { title: "Window Deck: Set Current Window Color" }
+    palette.map((color) => ({ label: color, description: "Window Deck 界面颜色", detail: colorName(color) })),
+    { title: "Window Deck：设置当前窗口颜色" }
   );
   if (!picked) {
     return;
@@ -152,7 +156,7 @@ async function renameWindow(windowId: string, alias: string): Promise<void> {
     await applyCurrentWindowTitle({ silent: true });
     await heartbeat();
   }
-  await deckViewProvider?.refresh();
+  await deckPanel?.refresh();
 }
 
 async function setWindowColor(windowId: string, color: string): Promise<void> {
@@ -163,16 +167,16 @@ async function setWindowColor(windowId: string, color: string): Promise<void> {
     }
     await heartbeat();
   }
-  await deckViewProvider?.refresh();
+  await deckPanel?.refresh();
 }
 
 async function handleFocusResult(windowId: string, result: Awaited<ReturnType<typeof focusWindow>>): Promise<void> {
   if (!result.ok) {
-    await vscode.window.showWarningMessage(result.reason, "Diagnose Focus Support");
+    await vscode.window.showWarningMessage(result.reason, "诊断聚焦支持");
     return;
   }
   await markFocused(windowId);
-  await deckViewProvider?.refresh();
+  await deckPanel?.refresh();
 }
 
 async function configureCurrentWindow(): Promise<void> {
@@ -181,13 +185,13 @@ async function configureCurrentWindow(): Promise<void> {
   const current = data.windows.find((record) => record.windowId === currentWindowId);
   const picked = await vscode.window.showQuickPick(
     [
-      { label: "$(edit) Rename", description: titleFromRecord(current?.alias, current?.workspaceName), action: "rename" },
-      { label: "$(symbol-color) Set Color", description: current?.color ?? "No color", action: "color" },
-      { label: "$(window) Apply VS Code Title Marker", description: `[${currentTitleToken}]`, action: "title" },
-      { label: "$(symbol-color) Apply Color to Workbench", description: "Writes workspace workbench.colorCustomizations", action: "workbenchColor" },
-      { label: "$(copy) Copy Window Info", description: current?.workspaceName ?? "Current window", action: "copy" }
+      { label: "$(edit) 重命名", description: titleFromRecord(current?.alias, current?.workspaceName), action: "rename" },
+      { label: "$(symbol-color) 设置颜色", description: current?.color ?? "未设置颜色", action: "color" },
+      { label: "$(window) 应用窗口标题标记", description: `[${currentTitleToken}]`, action: "title" },
+      { label: "$(symbol-color) 应用颜色到 VS Code 外观", description: "写入当前 workspace 的 workbench.colorCustomizations", action: "workbenchColor" },
+      { label: "$(copy) 复制窗口信息", description: current?.workspaceName ?? "当前窗口", action: "copy" }
     ],
-    { title: "Window Deck: Configure Current Window" }
+    { title: "Window Deck：配置当前窗口" }
   );
   if (!picked) {
     return;
@@ -200,14 +204,14 @@ async function configureCurrentWindow(): Promise<void> {
     await applyCurrentWindowTitle();
   } else if (picked.action === "workbenchColor") {
     if (!current?.color) {
-      await vscode.window.showWarningMessage("Set a Window Deck color first.");
+      await vscode.window.showWarningMessage("请先设置 Window Deck 窗口颜色。");
       return;
     }
     await applyWorkbenchColor(current.color);
-    await vscode.window.showInformationMessage("Window Deck wrote workbench color customizations for this workspace.");
+    await vscode.window.showInformationMessage("Window Deck 已为当前 workspace 写入 VS Code 外观颜色。");
   } else if (picked.action === "copy") {
     await vscode.env.clipboard.writeText(JSON.stringify(current, null, 2));
-    await vscode.window.showInformationMessage("Window Deck copied current window info.");
+    await vscode.window.showInformationMessage("Window Deck 已复制当前窗口信息。");
   }
 }
 
@@ -215,7 +219,7 @@ async function applyCurrentWindowTitle(options: { silent?: boolean } = {}): Prom
   const hasWorkspace = Boolean(vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length);
   if (!hasWorkspace) {
     if (!options.silent) {
-      await vscode.window.showWarningMessage("Window Deck can only apply a per-workspace title marker when a folder or workspace is open.");
+      await vscode.window.showWarningMessage("只有打开文件夹或 workspace 后，Window Deck 才能写入当前窗口的标题标记。");
     }
     return;
   }
@@ -226,13 +230,13 @@ async function applyCurrentWindowTitle(options: { silent?: boolean } = {}): Prom
   await vscode.workspace.getConfiguration("window").update("title", title, vscode.ConfigurationTarget.Workspace);
   if (!options.silent) {
     await heartbeat();
-    await vscode.window.showInformationMessage(`Window Deck applied workspace title marker [${currentTitleToken}].`);
+    await vscode.window.showInformationMessage(`Window Deck 已应用 workspace 标题标记 [${currentTitleToken}]。`);
   }
 }
 
 async function cleanupStaleWindows(): Promise<void> {
   const removed = await registry.cleanup(getConfigNumber("removeStaleAfterMs") || 86400000);
-  await vscode.window.showInformationMessage(`Window Deck cleaned ${removed} stale window${removed === 1 ? "" : "s"}.`);
+  await vscode.window.showInformationMessage(`Window Deck 已清理 ${removed} 个失联窗口。`);
 }
 
 async function diagnoseFocusSupport(): Promise<void> {
@@ -240,10 +244,10 @@ async function diagnoseFocusSupport(): Promise<void> {
   const current = data.windows.find((record) => record.windowId === currentWindowId);
   const details = [
     focusSupportMessage(),
-    `Platform: ${process.platform}`,
-    `Session: ${current?.platform.linuxSession ?? "n/a"}`,
-    `Desktop: ${current?.platform.desktop ?? "n/a"}`,
-    `Title token: ${currentTitleToken}`
+    `平台：${process.platform}`,
+    `会话：${current?.platform.linuxSession ?? "n/a"}`,
+    `桌面：${current?.platform.desktop ?? "n/a"}`,
+    `标题标记：${currentTitleToken}`
   ].join("\n");
   await vscode.window.showInformationMessage(details, { modal: true });
 }
@@ -257,7 +261,7 @@ async function ensureTitleToken(): Promise<void> {
     return;
   }
   await vscode.window.showWarningMessage(
-    "Window Deck cannot safely inject a unique title token through VS Code global window.title. Automatic title-token injection is disabled for this MVP."
+    "Window Deck 不能安全地通过 VS Code 全局 window.title 注入唯一标题标记。本版本不会自动修改全局标题设置。"
   );
 }
 
@@ -269,10 +273,10 @@ async function refreshStatus(record: WindowRecord): Promise<void> {
   statusBarItem.text = `$(window) ${title}`;
   statusBarItem.tooltip = [
     "Window Deck",
-    `Current: ${title}`,
-    `Workspace: ${compactPath(record.workspaceUri)}`,
-    `Remote: ${remoteLabel(record)}`,
-    "Click to switch window"
+    `当前：${title}`,
+    `Workspace：${compactPath(record.workspaceUri)}`,
+    `远程：${remoteLabel(record)}`,
+    "点击打开窗口面板"
   ].join("\n");
   statusBarItem.show();
 }
@@ -309,13 +313,13 @@ type WindowQuickPickItem = vscode.QuickPickItem & { record: WindowRecord };
 function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
   const title = titleFromRecord(record.alias, record.workspaceName);
   const dot = record.state.stale ? "○" : "●";
-  const current = record.windowId === currentWindowId ? "current" : undefined;
-  const stale = record.state.stale ? "stale" : undefined;
+  const current = record.windowId === currentWindowId ? "当前" : undefined;
+  const stale = record.state.stale ? "失联" : undefined;
   const branch = record.git?.branch;
-  const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), branch, current, stale, `active ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
+  const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), branch, current, stale, `活跃于 ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
   return {
     label: `${dot} ${title}`,
-    description: [record.color, record.windowId === currentWindowId ? "select to configure" : undefined].filter(Boolean).join(" · "),
+    description: [record.color, record.windowId === currentWindowId ? "选择后配置" : undefined].filter(Boolean).join(" · "),
     detail: detailParts.join(" · "),
     record
   };
@@ -323,16 +327,16 @@ function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
 
 function colorName(color: string): string {
   const names: Record<string, string> = {
-    "#4f8cff": "Blue",
-    "#2fb344": "Green",
-    "#f59f00": "Amber",
-    "#e03131": "Red",
-    "#9c36b5": "Purple",
-    "#0ca678": "Teal",
-    "#f76707": "Orange",
-    "#495057": "Gray"
+    "#4f8cff": "蓝色",
+    "#2fb344": "绿色",
+    "#f59f00": "琥珀色",
+    "#e03131": "红色",
+    "#9c36b5": "紫色",
+    "#0ca678": "青绿色",
+    "#f76707": "橙色",
+    "#495057": "灰色"
   };
-  return names[color] ?? "Custom";
+  return names[color] ?? "自定义";
 }
 
 function remoteLabel(record: WindowRecord): string {

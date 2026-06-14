@@ -1,23 +1,22 @@
 # Window Deck
 
-Window Deck is a VS Code multi-window navigator. It does not swap workspaces, reopen folders, migrate terminals, or touch debug sessions. It registers already-open VS Code windows, gives them searchable labels, and asks the operating system to focus a selected window.
+Window Deck 是一个 VS Code 多窗口导航器。它不会交换 workspace、重开文件夹、迁移终端或触碰 debug session。它只注册已经打开的 VS Code 窗口，为它们提供可重命名、可上色、可点击切换的导航页面，并请求操作系统聚焦目标窗口。
 
-## MVP Features
+## 功能
 
-- Registers each VS Code window in a local registry with heartbeat and stale detection.
-- Shows all known windows with `Window Deck: Show Windows`.
-- Renames the current window with `Window Deck: Rename Current Window`.
-- Sets a current-window color used by Window Deck UI.
-- Adds a status bar entry for the current window.
-- Adds a Window Deck Activity Bar panel with clickable window tabs, inline rename, and color swatches.
-- Detects local, SSH, WSL, Dev Container, Codespaces, and unknown remote windows.
-- Best-effort focus support:
-  - macOS: AppleScript fallback by matching the Window Deck title token.
-  - Linux X11: `wmctrl` or `xdotool` fallback when installed.
-  - Linux Wayland KDE: KWin D-Bus script fallback through `qdbus6` or `qdbus`.
-  - Other Linux Wayland desktops: indexing works; focus reports the platform limitation.
-- Cleans stale entries with `Window Deck: Cleanup Stale Windows`.
-- Reports platform focus support with `Window Deck: Diagnose Focus Support`.
+- 每个 VS Code 窗口都会注册到本机 registry，并通过心跳检测失联窗口。
+- 状态栏点击后打开可固定的 Window Deck 编辑器页。
+- 编辑器页中可以用鼠标点击窗口卡片进行切换。
+- 可以直接在窗口卡片里重命名。
+- 可以点击色块设置窗口颜色。
+- 支持本地、SSH、WSL、Dev Container、Codespaces 和未知远程窗口识别。
+- 聚焦能力：
+  - macOS：通过 AppleScript best-effort 匹配窗口标题。
+  - Linux X11：安装 `wmctrl` 或 `xdotool` 后可聚焦。
+  - Linux Wayland KDE：通过 `qdbus6` 或 `qdbus` 调用 KWin 脚本接口。
+  - 其他 Wayland 桌面：仍可索引、重命名和上色，但自动聚焦受系统限制。
+- `Window Deck: 清理失联窗口` 可以清理旧窗口记录。
+- `Window Deck: 诊断聚焦支持` 可以查看当前平台聚焦能力。
 
 ## Development
 

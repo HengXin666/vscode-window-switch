@@ -5,47 +5,53 @@ import { WindowRecord } from "./types";
 import { applyStaleState } from "./windowMetadata";
 import { compactPath, relativeAge, titleFromRecord } from "./util";
 
-type ViewActions = {
+type PanelActions = {
   focusWindow(windowId: string): Promise<void>;
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
   refreshCurrentWindow(): Promise<void>;
 };
 
-export class WindowDeckViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "windowDeck.tabs";
-  private view?: vscode.WebviewView;
+export class WindowDeckPanel {
+  private panel?: vscode.WebviewPanel;
   private refreshTimer?: NodeJS.Timeout;
 
   public constructor(
     private readonly registry: Registry,
     private readonly currentWindowId: () => string,
     private readonly staleAfterMs: () => number,
-    private readonly actions: ViewActions
+    private readonly actions: PanelActions
   ) {}
 
-  public resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = {
-      enableScripts: true
-    };
-    webviewView.webview.html = renderShell();
-    webviewView.webview.onDidReceiveMessage((message: { type: string; windowId?: string; alias?: string; color?: string }) => {
+  public async show(): Promise<void> {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.Active, true);
+      await this.refresh();
+      return;
+    }
+    this.panel = vscode.window.createWebviewPanel("windowDeck.panel", "Window Deck", vscode.ViewColumn.Active, {
+      enableScripts: true,
+      retainContextWhenHidden: true
+    });
+    this.panel.webview.html = renderShell();
+    this.panel.webview.onDidReceiveMessage((message: { type: string; windowId?: string; alias?: string; color?: string }) => {
       void this.handleMessage(message);
     });
-    webviewView.onDidDispose(() => {
+    this.panel.onDidDispose(() => {
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
+        this.refreshTimer = undefined;
       }
+      this.panel = undefined;
     });
-    void this.refresh();
     this.refreshTimer = setInterval(() => {
       void this.refresh();
     }, 2000);
+    await this.refresh();
   }
 
   public async refresh(): Promise<void> {
-    if (!this.view) {
+    if (!this.panel) {
       return;
     }
     await this.actions.refreshCurrentWindow();
@@ -62,7 +68,7 @@ export class WindowDeckViewProvider implements vscode.WebviewViewProvider {
       }
       return (b.state.lastFocusedAt ?? b.state.lastSeenAt) - (a.state.lastFocusedAt ?? a.state.lastSeenAt);
     });
-    await this.view.webview.postMessage({
+    await this.panel.webview.postMessage({
       type: "windows",
       windows: windows.map(toViewModel),
       currentWindowId: this.currentWindowId()
@@ -86,7 +92,7 @@ export class WindowDeckViewProvider implements vscode.WebviewViewProvider {
 
 function renderShell(): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -98,27 +104,47 @@ function renderShell(): string {
     }
     body {
       margin: 0;
-      padding: 10px;
       color: var(--vscode-foreground);
-      background: var(--vscode-sideBar-background);
+      background: var(--vscode-editor-background);
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
     }
-    .deck {
+    .bar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 38px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--vscode-editorGroup-border);
+      background: var(--vscode-editor-background);
+    }
+    .title {
+      font-weight: 600;
+    }
+    .hint {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+    }
+    .deck {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: var(--gap);
+      padding: 12px;
     }
     .tab {
       display: grid;
       grid-template-columns: 10px minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
-      min-height: 42px;
-      padding: 7px 8px;
-      border: 1px solid var(--vscode-sideBarSectionHeader-border);
+      min-height: 46px;
+      padding: 8px;
+      border: 1px solid var(--vscode-editorGroup-border);
       border-radius: var(--radius);
-      background: var(--vscode-list-inactiveSelectionBackground);
+      background: var(--vscode-sideBar-background);
       cursor: pointer;
     }
     .tab.current {
@@ -176,9 +202,17 @@ function renderShell(): string {
       background: var(--swatch);
       cursor: pointer;
     }
+    .empty {
+      color: var(--vscode-descriptionForeground);
+      padding: 16px;
+    }
   </style>
 </head>
 <body>
+  <div class="bar">
+    <div class="title">Window Deck</div>
+    <div class="hint">点击窗口切换，直接编辑名称，点击色块标注颜色。可以把本页拖到编辑器右侧并固定。</div>
+  </div>
   <div class="deck" id="deck"></div>
   <script>
     const vscode = acquireVsCodeApi();
@@ -197,8 +231,7 @@ function renderShell(): string {
       if (activeWindowId && editing.has(activeWindowId)) {
         return;
       }
-      deck.innerHTML = windows.length ? windows.map((record) => renderWindow(record, currentWindowId)).join("") : "<div>No windows registered yet.</div>";
-
+      deck.innerHTML = windows.length ? windows.map((record) => renderWindow(record, currentWindowId)).join("") : '<div class="empty">还没有注册的 VS Code 窗口。</div>';
       document.querySelectorAll(".tab").forEach((tab) => {
         tab.addEventListener("click", (event) => {
           if (event.target.closest("input") || event.target.closest("button")) return;
@@ -238,7 +271,7 @@ function renderShell(): string {
       return '<div class="' + classes + '" data-window-id="' + escapeHtml(record.windowId) + '" style="--tab-color:' + escapeHtml(record.color) + '">' +
         '<div class="dot"></div>' +
         '<div class="main">' +
-        '<input class="alias" data-window-id="' + escapeHtml(record.windowId) + '" value="' + escapeHtml(record.title) + '" aria-label="Window alias">' +
+        '<input class="alias" data-window-id="' + escapeHtml(record.windowId) + '" value="' + escapeHtml(record.title) + '" aria-label="窗口名称">' +
         '<div class="meta">' + escapeHtml(record.meta) + '</div>' +
         '</div>' +
         '<div class="swatches">' + swatches + '</div>' +
@@ -259,7 +292,7 @@ function renderShell(): string {
 
 function toViewModel(record: WindowRecord): Record<string, string | boolean> {
   const title = titleFromRecord(record.alias, record.workspaceName);
-  const meta = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, record.state.stale ? "stale" : `active ${relativeAge(record.state.lastSeenAt)}`]
+  const meta = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, record.state.stale ? "已失联" : `活跃于 ${relativeAge(record.state.lastSeenAt)}`]
     .filter(Boolean)
     .join(" · ");
   return {
@@ -273,23 +306,23 @@ function toViewModel(record: WindowRecord): Record<string, string | boolean> {
 
 function remoteLabel(record: WindowRecord): string {
   if (record.remote.kind === "local") {
-    return "local";
+    return "本地";
   }
   if (record.remote.kind === "ssh") {
-    return `ssh:${authorityName(record.remote.remoteAuthority)}`;
+    return `SSH:${authorityName(record.remote.remoteAuthority)}`;
   }
   if (record.remote.kind === "dev-container") {
-    return "container";
+    return "容器";
   }
   if (record.remote.kind === "wsl") {
-    return `wsl:${authorityName(record.remote.remoteAuthority)}`;
+    return `WSL:${authorityName(record.remote.remoteAuthority)}`;
   }
   return record.remote.kind;
 }
 
 function authorityName(authority?: string): string {
   if (!authority) {
-    return "unknown";
+    return "未知";
   }
   return authority.split("+").pop() ?? authority;
 }
