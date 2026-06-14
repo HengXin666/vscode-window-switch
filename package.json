@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -74,6 +74,24 @@
         "category": "Window Deck"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "windowDeck",
+          "title": "Window Deck",
+          "icon": "$(window)"
+        }
+      ]
+    },
+    "views": {
+      "windowDeck": [
+        {
+          "id": "windowDeck.tabs",
+          "name": "Windows",
+          "type": "webview"
+        }
+      ]
+    },
     "configuration": {
       "title": "Window Deck",
       "properties": {
@@ -107,6 +125,11 @@
           "type": "boolean",
           "default": false,
           "description": "When enabled, setting a window color also writes workspace workbench.colorCustomizations."
+        },
+        "windowDeck.autoApplyTitleMarkerOnKdeWayland": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically writes a per-workspace window.title marker on KDE Wayland so KWin can focus windows reliably."
         }
       }
     },

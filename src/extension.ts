@@ -4,13 +4,15 @@ import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord } from "./types";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
-import { compactPath, getConfigBoolean, getConfigNumber, getConfigString, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
+import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
+import { WindowDeckViewProvider } from "./windowDeckView";
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let registry: Registry;
 let currentWindowId: string;
 let currentTitleToken: string;
+let deckViewProvider: WindowDeckViewProvider | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   registry = new Registry(registryDirectory(context));
@@ -22,8 +24,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
+  deckViewProvider = new WindowDeckViewProvider(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
+    focusWindow: focusRegisteredWindow,
+    renameWindow,
+    setWindowColor,
+    refreshCurrentWindow: heartbeat
+  });
 
   context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(WindowDeckViewProvider.viewType, deckViewProvider),
     vscode.commands.registerCommand("windowDeck.showWindows", showWindows),
     vscode.commands.registerCommand("windowDeck.renameCurrentWindow", renameCurrentWindow),
     vscode.commands.registerCommand("windowDeck.setCurrentWindowColor", setCurrentWindowColor),
@@ -93,11 +102,7 @@ async function showWindows(): Promise<void> {
     return;
   }
   const result = await focusWindow(selected.record);
-  if (!result.ok) {
-    await vscode.window.showWarningMessage(result.reason, "Diagnose Focus Support");
-    return;
-  }
-  await markFocused(selected.record.windowId);
+  await handleFocusResult(selected.record.windowId, result);
 }
 
 async function renameCurrentWindow(): Promise<void> {
@@ -111,8 +116,7 @@ async function renameCurrentWindow(): Promise<void> {
   if (alias === undefined) {
     return;
   }
-  await registry.saveUserConfig({ windowId: currentWindowId, alias: alias.trim() || undefined });
-  await heartbeat();
+  await renameWindow(currentWindowId, alias);
 }
 
 async function setCurrentWindowColor(): Promise<void> {
@@ -124,11 +128,51 @@ async function setCurrentWindowColor(): Promise<void> {
   if (!picked) {
     return;
   }
-  await registry.saveUserConfig({ windowId: currentWindowId, color: picked.label });
-  if (getConfigBoolean("applyWorkbenchColors")) {
-    await applyWorkbenchColor(picked.label);
-  }
+  await setWindowColor(currentWindowId, picked.label);
+}
+
+async function focusRegisteredWindow(windowId: string): Promise<void> {
   await heartbeat();
+  if (windowId === currentWindowId) {
+    return;
+  }
+  const data = await registry.read();
+  const target = data.windows.find((record) => record.windowId === windowId);
+  if (!target) {
+    await vscode.window.showWarningMessage("Window Deck 找不到目标窗口。该窗口可能已关闭。");
+    return;
+  }
+  const result = await focusWindow(target);
+  await handleFocusResult(windowId, result);
+}
+
+async function renameWindow(windowId: string, alias: string): Promise<void> {
+  await registry.saveUserConfig({ windowId, alias: alias.trim() || undefined });
+  if (windowId === currentWindowId) {
+    await applyCurrentWindowTitle({ silent: true });
+    await heartbeat();
+  }
+  await deckViewProvider?.refresh();
+}
+
+async function setWindowColor(windowId: string, color: string): Promise<void> {
+  await registry.saveUserConfig({ windowId, color });
+  if (windowId === currentWindowId) {
+    if (getConfigBoolean("applyWorkbenchColors")) {
+      await applyWorkbenchColor(color);
+    }
+    await heartbeat();
+  }
+  await deckViewProvider?.refresh();
+}
+
+async function handleFocusResult(windowId: string, result: Awaited<ReturnType<typeof focusWindow>>): Promise<void> {
+  if (!result.ok) {
+    await vscode.window.showWarningMessage(result.reason, "Diagnose Focus Support");
+    return;
+  }
+  await markFocused(windowId);
+  await deckViewProvider?.refresh();
 }
 
 async function configureCurrentWindow(): Promise<void> {
@@ -167,10 +211,12 @@ async function configureCurrentWindow(): Promise<void> {
   }
 }
 
-async function applyCurrentWindowTitle(): Promise<void> {
+async function applyCurrentWindowTitle(options: { silent?: boolean } = {}): Promise<void> {
   const hasWorkspace = Boolean(vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length);
   if (!hasWorkspace) {
-    await vscode.window.showWarningMessage("Window Deck can only apply a per-workspace title marker when a folder or workspace is open.");
+    if (!options.silent) {
+      await vscode.window.showWarningMessage("Window Deck can only apply a per-workspace title marker when a folder or workspace is open.");
+    }
     return;
   }
   const data = await registry.read();
@@ -178,8 +224,10 @@ async function applyCurrentWindowTitle(): Promise<void> {
   const aliasOrRoot = current?.alias?.trim() || "${rootName}";
   const title = `${aliasOrRoot}${"${separator}${activeEditorShort}"} [${currentTitleToken}]`;
   await vscode.workspace.getConfiguration("window").update("title", title, vscode.ConfigurationTarget.Workspace);
-  await heartbeat();
-  await vscode.window.showInformationMessage(`Window Deck applied workspace title marker [${currentTitleToken}].`);
+  if (!options.silent) {
+    await heartbeat();
+    await vscode.window.showInformationMessage(`Window Deck applied workspace title marker [${currentTitleToken}].`);
+  }
 }
 
 async function cleanupStaleWindows(): Promise<void> {
@@ -201,6 +249,10 @@ async function diagnoseFocusSupport(): Promise<void> {
 }
 
 async function ensureTitleToken(): Promise<void> {
+  if (process.platform === "linux" && linuxSession() === "wayland" && desktopEnvironment() === "kde" && getConfigBoolean("autoApplyTitleMarkerOnKdeWayland")) {
+    await applyCurrentWindowTitle({ silent: true });
+    return;
+  }
   if (getConfigString("titleTokenMode") !== "visible") {
     return;
   }

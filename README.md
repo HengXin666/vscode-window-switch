@@ -9,6 +9,7 @@ Window Deck is a VS Code multi-window navigator. It does not swap workspaces, re
 - Renames the current window with `Window Deck: Rename Current Window`.
 - Sets a current-window color used by Window Deck UI.
 - Adds a status bar entry for the current window.
+- Adds a Window Deck Activity Bar panel with clickable window tabs, inline rename, and color swatches.
 - Detects local, SSH, WSL, Dev Container, Codespaces, and unknown remote windows.
 - Best-effort focus support:
   - macOS: AppleScript fallback by matching the Window Deck title token.
@@ -43,3 +44,5 @@ The workflow needs the repository setting `Actions: Read and write permissions` 
 Automatic OS focusing is best-effort in this MVP. VS Code exposes `window.title` as configuration rather than a per-window runtime title API, so Window Deck does not automatically write a unique token into global settings.
 
 On KDE Wayland, install Qt D-Bus tools so `qdbus6` or `qdbus` is available. Window Deck then asks KWin to focus a matching VS Code window by title. This remains best-effort because KWin controls the final activation behavior.
+
+On KDE Wayland, Window Deck automatically writes a workspace-level `window.title` marker by default so KWin can match windows reliably. Disable this with `windowDeck.autoApplyTitleMarkerOnKdeWayland`.
