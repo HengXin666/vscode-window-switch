@@ -36,6 +36,13 @@ export class BridgeServer implements vscode.Disposable {
     await new Promise<void>((resolve, reject) => {
       this.server?.once("error", reject);
       this.server?.listen(BridgeServer.port, "127.0.0.1", () => resolve());
+    }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        this.server?.close();
+        this.server = undefined;
+        return;
+      }
+      throw error;
     });
     await context.globalState.update("windowDeck.bridgePort", BridgeServer.port);
   }
