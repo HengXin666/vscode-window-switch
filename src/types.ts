@@ -51,10 +51,24 @@ export type UserWindowConfig = {
   hidden?: boolean;
 };
 
+export type WindowDeckGroup = {
+  id: string;
+  title: string;
+  color?: string;
+  collapsed?: boolean;
+  windowIds: string[];
+};
+
+export type WindowDeckLayout = {
+  order: string[];
+  groups: WindowDeckGroup[];
+};
+
 export type RegistryData = {
   version: 1;
   windows: WindowRecord[];
   userConfigs: UserWindowConfig[];
+  layout: WindowDeckLayout;
 };
 
 export type FocusResult =

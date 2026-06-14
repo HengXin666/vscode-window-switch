@@ -26,8 +26,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(statusBarItem);
   deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
+    openWindow,
     renameWindow,
     setWindowColor,
+    removeWindow,
+    saveLayout: (layout) => registry.saveLayout(layout),
     refreshCurrentWindow: heartbeat
   });
 
@@ -150,12 +153,31 @@ async function focusRegisteredWindow(windowId: string): Promise<void> {
   await handleFocusResult(windowId, result);
 }
 
+async function openWindow(windowId: string): Promise<void> {
+  const data = await registry.read();
+  const target = data.windows.find((record) => record.windowId === windowId);
+  if (!target?.workspaceUri) {
+    await vscode.window.showWarningMessage("这个窗口没有可重新打开的 workspace 路径。");
+    return;
+  }
+  try {
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.parse(target.workspaceUri), true);
+  } catch (error) {
+    await vscode.window.showWarningMessage(`重新打开窗口失败：${(error as Error).message}`);
+  }
+}
+
 async function renameWindow(windowId: string, alias: string): Promise<void> {
   await registry.saveUserConfig({ windowId, alias: alias.trim() || undefined });
   if (windowId === currentWindowId) {
     await applyCurrentWindowTitle({ silent: true });
     await heartbeat();
   }
+  await deckPanel?.refresh();
+}
+
+async function removeWindow(windowId: string): Promise<void> {
+  await registry.removeWindow(windowId);
   await deckPanel?.refresh();
 }
 

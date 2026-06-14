@@ -1,12 +1,16 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { RegistryData, UserWindowConfig, WindowRecord } from "./types";
+import { RegistryData, UserWindowConfig, WindowDeckLayout, WindowRecord } from "./types";
 
 const emptyRegistry = (): RegistryData => ({
   version: 1,
   windows: [],
-  userConfigs: []
+  userConfigs: [],
+  layout: {
+    order: [],
+    groups: []
+  }
 });
 
 export class Registry {
@@ -23,7 +27,8 @@ export class Registry {
       return {
         version: 1,
         windows: Array.isArray(parsed.windows) ? parsed.windows : [],
-        userConfigs: Array.isArray(parsed.userConfigs) ? parsed.userConfigs : []
+        userConfigs: Array.isArray(parsed.userConfigs) ? parsed.userConfigs : [],
+        layout: normalizeLayout(parsed.layout)
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -48,7 +53,9 @@ export class Registry {
         data.windows[existing] = mergeConfig(record, data.userConfigs.find((item) => item.windowId === record.windowId));
       } else {
         data.windows.push(mergeConfig(record, data.userConfigs.find((item) => item.windowId === record.windowId)));
+        data.layout.order.push(record.windowId);
       }
+      data.layout = normalizeLayout(data.layout, data.windows.map((item) => item.windowId));
     });
   }
 
@@ -73,8 +80,32 @@ export class Registry {
       const before = data.windows.length;
       data.windows = data.windows.filter((record) => !record.state.stale || record.state.lastSeenAt >= cutoff);
       removed = before - data.windows.length;
+      data.layout = normalizeLayout(data.layout, data.windows.map((item) => item.windowId));
     });
     return removed;
+  }
+
+  public async removeWindow(windowId: string): Promise<void> {
+    await this.update((data) => {
+      data.windows = data.windows.filter((record) => record.windowId !== windowId);
+      data.userConfigs = data.userConfigs.filter((config) => config.windowId !== windowId);
+      data.layout = normalizeLayout(
+        {
+          order: data.layout.order.filter((item) => item !== windowId),
+          groups: data.layout.groups.map((group) => ({
+            ...group,
+            windowIds: group.windowIds.filter((item) => item !== windowId)
+          }))
+        },
+        data.windows.map((item) => item.windowId)
+      );
+    });
+  }
+
+  public async saveLayout(layout: WindowDeckLayout): Promise<void> {
+    await this.update((data) => {
+      data.layout = normalizeLayout(layout, data.windows.map((item) => item.windowId));
+    });
   }
 
   private async write(data: RegistryData): Promise<void> {
@@ -82,6 +113,34 @@ export class Registry {
     await fs.writeFile(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     await fs.rename(tempPath, this.filePath);
   }
+}
+
+function normalizeLayout(layout?: WindowDeckLayout, knownWindowIds: string[] = []): WindowDeckLayout {
+  const known = new Set(knownWindowIds);
+  const seen = new Set<string>();
+  const order = (Array.isArray(layout?.order) ? layout.order : []).filter((windowId) => {
+    if (seen.has(windowId) || (known.size > 0 && !known.has(windowId))) {
+      return false;
+    }
+    seen.add(windowId);
+    return true;
+  });
+  for (const windowId of knownWindowIds) {
+    if (!seen.has(windowId)) {
+      order.push(windowId);
+      seen.add(windowId);
+    }
+  }
+  const groups = (Array.isArray(layout?.groups) ? layout.groups : [])
+    .map((group) => ({
+      id: group.id,
+      title: group.title,
+      color: group.color,
+      collapsed: group.collapsed,
+      windowIds: group.windowIds.filter((windowId) => seen.has(windowId))
+    }))
+    .filter((group) => group.windowIds.length > 0);
+  return { order, groups };
 }
 
 function mergeConfig(record: WindowRecord, config?: UserWindowConfig): WindowRecord {
