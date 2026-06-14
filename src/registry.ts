@@ -23,7 +23,7 @@ export class Registry {
   public async read(): Promise<RegistryData> {
     try {
       const text = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(text) as RegistryData;
+      const parsed = parseRegistryJson(text);
       return {
         version: 1,
         windows: Array.isArray(parsed.windows) ? parsed.windows : [],
@@ -118,6 +118,56 @@ export class Registry {
     await fs.writeFile(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     await fs.rename(tempPath, this.filePath);
   }
+}
+
+function parseRegistryJson(text: string): RegistryData {
+  try {
+    return JSON.parse(text) as RegistryData;
+  } catch (error) {
+    const recovered = parseFirstJsonObject(text);
+    if (recovered) {
+      return recovered as RegistryData;
+    }
+    throw error;
+  }
+}
+
+function parseFirstJsonObject(text: string): unknown | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let start = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (start === -1) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(text.slice(start, index + 1));
+      }
+    }
+  }
+  return undefined;
 }
 
 function normalizeLayout(layout?: WindowDeckLayout, knownWindowIds: string[] = []): WindowDeckLayout {
