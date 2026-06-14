@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { BridgeServer } from "./bridgeServer";
 import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord } from "./types";
@@ -13,8 +14,11 @@ let registry: Registry;
 let currentWindowId: string;
 let currentTitleToken: string;
 let deckPanel: WindowDeckPanel | undefined;
+let bridgeServer: BridgeServer | undefined;
+let extensionPath: string;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionPath = context.extensionPath;
   registry = new Registry(registryDirectory(context));
   currentWindowId = `${process.pid}-${randomId(8)}`;
   currentTitleToken = context.workspaceState.get<string>("windowDeck.titleToken") ?? `WD:${randomId(3)}`;
@@ -33,8 +37,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     saveLayout: (layout) => registry.saveLayout(layout),
     refreshCurrentWindow: heartbeat
   });
+  bridgeServer = new BridgeServer(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
+    focusWindow: focusRegisteredWindow,
+    openWindow,
+    renameWindow,
+    setWindowColor,
+    removeWindow,
+    saveLayout: (layout) => registry.saveLayout(layout),
+    refreshCurrentWindow: heartbeat
+  });
+  await bridgeServer.start(context);
+  context.subscriptions.push(bridgeServer);
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("windowDeck.installWorkbenchPatch", installWorkbenchPatch),
+    vscode.commands.registerCommand("windowDeck.uninstallWorkbenchPatch", uninstallWorkbenchPatch),
     vscode.commands.registerCommand("windowDeck.openPanel", openPanel),
     vscode.commands.registerCommand("windowDeck.showWindows", showWindows),
     vscode.commands.registerCommand("windowDeck.renameCurrentWindow", renameCurrentWindow),
@@ -55,6 +72,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   heartbeatTimer = setInterval(() => {
     void heartbeat();
   }, interval);
+}
+
+async function installWorkbenchPatch(): Promise<void> {
+  await vscode.window.showInformationMessage(
+    "Window Deck 顶部栏补丁需要修改 VS Code 安装目录。请在终端运行 scripts/install-workbench-patch.sh，然后重启 VS Code。",
+    "复制命令"
+  ).then(async (picked) => {
+    if (picked === "复制命令") {
+      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/install-workbench-patch.sh`)}`);
+    }
+  });
+}
+
+async function uninstallWorkbenchPatch(): Promise<void> {
+  await vscode.window.showInformationMessage(
+    "卸载 Window Deck 顶部栏补丁需要修改 VS Code 安装目录。请在终端运行 scripts/uninstall-workbench-patch.sh，然后重启 VS Code。",
+    "复制命令"
+  ).then(async (picked) => {
+    if (picked === "复制命令") {
+      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/uninstall-workbench-patch.sh`)}`);
+    }
+  });
 }
 
 export async function deactivate(): Promise<void> {
@@ -403,4 +442,8 @@ function compareWindows(a: WindowRecord, b: WindowRecord): number {
     return a.state.stale ? 1 : -1;
   }
   return (b.state.lastFocusedAt ?? b.state.lastSeenAt) - (a.state.lastFocusedAt ?? a.state.lastSeenAt);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

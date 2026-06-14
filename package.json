@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onCommand:windowDeck.installWorkbenchPatch",
+    "onCommand:windowDeck.uninstallWorkbenchPatch",
     "onCommand:windowDeck.openPanel",
     "onCommand:windowDeck.showWindows",
     "onCommand:windowDeck.renameCurrentWindow",
@@ -38,6 +40,16 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "windowDeck.installWorkbenchPatch",
+        "title": "Window Deck: 安装顶部栏补丁",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.uninstallWorkbenchPatch",
+        "title": "Window Deck: 卸载顶部栏补丁",
+        "category": "Window Deck"
+      },
       {
         "command": "windowDeck.openPanel",
         "title": "Window Deck: 打开高级管理面板",
@@ -130,6 +142,12 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "windowDeck.installWorkbenchPatch"
+        },
+        {
+          "command": "windowDeck.uninstallWorkbenchPatch"
+        },
         {
           "command": "windowDeck.openPanel"
         },
