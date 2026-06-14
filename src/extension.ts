@@ -5,7 +5,8 @@ import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord } from "./types";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
-import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, titleFromRecord } from "./util";
+import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
+import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 import { WindowDeckPanel } from "./windowDeckPanel";
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -76,11 +77,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 async function installWorkbenchPatch(): Promise<void> {
   await vscode.window.showInformationMessage(
-    "Window Deck 顶部栏补丁需要修改 VS Code 安装目录。请在终端运行 scripts/install-workbench-patch.sh，然后重启 VS Code。",
-    "复制命令"
+    "Window Deck 已改为外部悬浮窗口，不再需要安装顶部栏补丁。旧补丁可用卸载命令移除。",
+    "复制卸载命令"
   ).then(async (picked) => {
-    if (picked === "复制命令") {
-      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/install-workbench-patch.sh`)}`);
+    if (picked === "复制卸载命令") {
+      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/uninstall-workbench-patch.sh`)}`);
     }
   });
 }
@@ -137,7 +138,115 @@ async function heartbeat(): Promise<void> {
 
 async function showWindows(): Promise<void> {
   await heartbeat();
-  await deckPanel?.show();
+  const staleAfterMs = getConfigNumber("staleAfterMs") || 20000;
+  const data = await registry.read();
+  const visible = visibleWindowRecords(applyStaleState(data.windows, staleAfterMs, currentWindowId));
+  const layout = normalizeVisibleLayout(data.layout, visible);
+  const ordered = orderVisibleRecords(visible, layout);
+  if (!ordered.length) {
+    await vscode.window.showInformationMessage("Window Deck 没有已注册的工作区窗口。");
+    return;
+  }
+  const quickPick = vscode.window.createQuickPick<WindowQuickPickItem>();
+  quickPick.title = "Window Deck";
+  quickPick.placeholder = "选择窗口切换；右侧按钮可重命名、改色、删除或打开管理视图";
+  quickPick.matchOnDescription = true;
+  quickPick.matchOnDetail = true;
+  quickPick.items = ordered.flatMap((record, index, records) => {
+    const withSeparator: WindowQuickPickItem[] = [];
+    if (index === 0 || records[index - 1].state.stale !== record.state.stale) {
+      withSeparator.push({ label: record.state.stale ? "历史关闭" : "已打开", kind: vscode.QuickPickItemKind.Separator });
+    }
+    withSeparator.push(toQuickPickItem(record));
+    return withSeparator;
+  });
+  quickPick.onDidAccept(() => {
+    const selected = quickPick.selectedItems[0];
+    quickPick.hide();
+    if (selected?.record) {
+      void activateQuickPickWindow(selected.record);
+    }
+  });
+  quickPick.onDidTriggerItemButton((event) => {
+    const record = event.item.record;
+    if (!record) {
+      return;
+    }
+    if (event.button.tooltip === "重命名") {
+      void renameWindowFromPick(record);
+    } else if (event.button.tooltip === "设置颜色") {
+      void setWindowColorFromPick(record);
+    } else if (event.button.tooltip === "删除记录") {
+      void removeWindow(record.windowId);
+      quickPick.items = quickPick.items.filter((item) => item.record?.windowId !== record.windowId);
+    } else if (event.button.tooltip === "管理视图") {
+      quickPick.hide();
+      void deckPanel?.show();
+    }
+  });
+  quickPick.onDidHide(() => quickPick.dispose());
+  quickPick.show();
+}
+
+async function activateQuickPickWindow(record: WindowRecord): Promise<void> {
+  if (record.windowId === currentWindowId) {
+    await configureCurrentWindow();
+  } else if (record.state.stale) {
+    await openWindow(record.windowId);
+  } else {
+    const result = await focusWindow(record);
+    await handleFocusResult(record.windowId, result);
+  }
+}
+
+type WindowQuickPickItem = vscode.QuickPickItem & { record?: WindowRecord };
+
+const quickPickButtons = {
+  rename: new vscode.ThemeIcon("edit"),
+  color: new vscode.ThemeIcon("symbol-color"),
+  remove: new vscode.ThemeIcon("trash"),
+  manage: new vscode.ThemeIcon("list-tree")
+};
+
+function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
+  const title = titleFromRecord(record.alias, record.workspaceName);
+  const marker = record.windowId === currentWindowId ? "$(check)" : record.state.stale ? "$(history)" : "$(window)";
+  const status = record.windowId === currentWindowId ? "当前" : record.state.stale ? "历史关闭" : "已打开";
+  const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, `活跃于 ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
+  return {
+    label: `${marker} ${title}`,
+    description: [status, record.color ? `${colorName(record.color)} ${record.color}` : undefined].filter(Boolean).join(" · "),
+    detail: detailParts.join(" · "),
+    buttons: [
+      { iconPath: quickPickButtons.rename, tooltip: "重命名" },
+      { iconPath: quickPickButtons.color, tooltip: "设置颜色" },
+      ...(record.state.stale ? [{ iconPath: quickPickButtons.remove, tooltip: "删除记录" }] : []),
+      { iconPath: quickPickButtons.manage, tooltip: "管理视图" }
+    ],
+    record
+  };
+}
+
+async function renameWindowFromPick(record: WindowRecord): Promise<void> {
+  const alias = await vscode.window.showInputBox({
+    title: "Window Deck：重命名窗口",
+    value: record.alias ?? record.workspaceName ?? "",
+    prompt: "别名存储在 Window Deck 全局存储中，不会写入项目文件。"
+  });
+  if (alias !== undefined) {
+    await renameWindow(record.windowId, alias);
+  }
+}
+
+async function setWindowColorFromPick(record: WindowRecord): Promise<void> {
+  const palette = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
+  const picked = await vscode.window.showQuickPick(
+    palette.map((color) => ({ label: color, description: colorName(color), detail: record.windowId === currentWindowId ? "当前窗口" : titleFromRecord(record.alias, record.workspaceName) })),
+    { title: "Window Deck：设置窗口颜色" }
+  );
+  if (picked) {
+    await setWindowColor(record.windowId, picked.label);
+  }
 }
 
 async function renameCurrentWindow(): Promise<void> {

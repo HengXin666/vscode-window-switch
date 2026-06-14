@@ -18,6 +18,9 @@ type BridgeActions = {
 
 export class BridgeServer implements vscode.Disposable {
   public static readonly port = 39417;
+  private commandSeq = 0;
+  private commandIssuedAt = 0;
+  private overlayAckSeq = 0;
   private server?: http.Server;
 
   public constructor(
@@ -53,6 +56,14 @@ export class BridgeServer implements vscode.Disposable {
     this.server = undefined;
   }
 
+  public async toggleOverlay(): Promise<boolean> {
+    if (this.server) {
+      const seq = this.nextCommandSeq();
+      return this.waitForOverlayAck(seq);
+    }
+    return postLocalToggle();
+  }
+
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.setHeader("Access-Control-Allow-Headers", "content-type");
@@ -76,6 +87,16 @@ export class BridgeServer implements vscode.Disposable {
         });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/command") {
+        this.json(response, { seq: this.commandSeq, issuedAt: this.commandIssuedAt });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/toggle") {
+        const seq = this.nextCommandSeq();
+        const ack = await this.waitForOverlayAck(seq);
+        this.json(response, { ok: ack });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/action") {
         const body = await readBody(request);
         await this.applyAction(JSON.parse(body || "{}") as Record<string, unknown>);
@@ -91,7 +112,11 @@ export class BridgeServer implements vscode.Disposable {
   private async applyAction(action: Record<string, unknown>): Promise<void> {
     const type = String(action.type ?? "");
     const windowId = typeof action.windowId === "string" ? action.windowId : undefined;
-    if (type === "layout" && isLayout(action.layout)) {
+    if (type === "toggle") {
+      this.nextCommandSeq();
+    } else if (type === "overlayAck" && typeof action.seq === "number") {
+      this.overlayAckSeq = Math.max(this.overlayAckSeq, action.seq);
+    } else if (type === "layout" && isLayout(action.layout)) {
       await this.actions.saveLayout(action.layout);
     } else if (windowId && type === "focus") {
       await this.actions.focusWindow(windowId);
@@ -110,6 +135,27 @@ export class BridgeServer implements vscode.Disposable {
     response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
     response.end(JSON.stringify(data));
   }
+
+  private nextCommandSeq(): number {
+    this.commandSeq += 1;
+    this.commandIssuedAt = Date.now();
+    return this.commandSeq;
+  }
+
+  private async waitForOverlayAck(seq: number): Promise<boolean> {
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      if (this.overlayAckSeq >= seq) {
+        return true;
+      }
+      await sleep(50);
+    }
+    return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readBody(request: http.IncomingMessage): Promise<string> {
@@ -121,6 +167,47 @@ function readBody(request: http.IncomingMessage): Promise<string> {
     });
     request.on("end", () => resolve(body));
     request.on("error", reject);
+  });
+}
+
+function postLocalToggle(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const body = "{}";
+    const request = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BridgeServer.port,
+        path: "/toggle",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body)
+        },
+        timeout: 800
+      },
+      (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          text += chunk;
+        });
+        response.resume();
+        response.on("end", () => {
+          try {
+            const parsed = JSON.parse(text || "{}") as { ok?: boolean };
+            resolve(Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300 && parsed.ok));
+          } catch {
+            resolve(false);
+          }
+        });
+      }
+    );
+    request.on("error", () => resolve(false));
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.end(body);
   });
 }
 
