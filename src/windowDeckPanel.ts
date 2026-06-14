@@ -166,7 +166,8 @@ function renderShell(): string {
       width: 220px;
       min-height: 34px;
       padding: 5px 7px;
-      border: 1px solid var(--vscode-editorGroup-border);
+      border: 1px solid var(--tab-color);
+      border-left-width: 4px;
       border-radius: var(--radius);
       background: var(--vscode-tab-inactiveBackground);
       cursor: pointer;
@@ -195,21 +196,11 @@ function renderShell(): string {
     }
     .alias {
       min-width: 0;
-      width: 100%;
-      box-sizing: border-box;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: inherit;
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 4px;
-      padding: 1px 3px;
-      font: inherit;
       font-weight: 600;
-    }
-    .alias:focus {
-      border-color: var(--vscode-focusBorder);
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      outline: none;
     }
     .actions {
       display: flex;
@@ -232,16 +223,36 @@ function renderShell(): string {
       display: none;
       position: fixed;
       z-index: 5;
-      grid-template-columns: repeat(4, 18px);
-      gap: 5px;
-      padding: 6px;
+      min-width: 170px;
+      padding: 5px;
       border: 1px solid var(--vscode-widget-border);
       border-radius: var(--radius);
       background: var(--vscode-dropdown-background);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
     }
     .menu.open {
+      display: block;
+    }
+    .menu-item {
+      display: block;
+      width: 100%;
+      min-height: 26px;
+      padding: 4px 8px;
+      border: 0;
+      border-radius: 4px;
+      color: var(--vscode-dropdown-foreground);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .menu-item:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .palette {
       display: grid;
+      grid-template-columns: repeat(8, 18px);
+      gap: 5px;
+      padding: 6px 4px 3px;
     }
     .swatch {
       width: 18px;
@@ -300,24 +311,22 @@ function renderShell(): string {
 <body>
   <div class="toolbar">
     <span class="title">Window Deck</span>
-    <span class="hint">点击切换；失联窗口点标题可重新打开，点 x 删除；拖拽排序，拖到另一个标签上创建分组。</span>
+    <span class="hint">左键切换/重新打开；右键重命名、改色、删除；拖拽排序，拖到另一个标签上创建分组。</span>
   </div>
   <div class="deck" id="deck"></div>
-  <div class="menu" id="colorMenu"></div>
+  <div class="menu" id="contextMenu"></div>
   <script>
     const vscode = acquireVsCodeApi();
     const colors = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
     const deck = document.getElementById("deck");
-    const colorMenu = document.getElementById("colorMenu");
+    const contextMenu = document.getElementById("contextMenu");
     let windows = [];
     let layout = { order: [], groups: [] };
     let currentWindowId = "";
     let draggedWindowId = "";
-    let editingWindowId = "";
 
     window.addEventListener("message", (event) => {
       if (event.data.type !== "windows") return;
-      if (editingWindowId) return;
       windows = event.data.windows || [];
       layout = normalizeLayout(event.data.layout || { order: [], groups: [] });
       currentWindowId = event.data.currentWindowId || "";
@@ -325,8 +334,8 @@ function renderShell(): string {
     });
 
     document.addEventListener("click", (event) => {
-      if (!event.target.closest("#colorMenu") && !event.target.closest(".color-button")) {
-        colorMenu.classList.remove("open");
+      if (!event.target.closest("#contextMenu")) {
+        contextMenu.classList.remove("open");
       }
     });
 
@@ -371,9 +380,8 @@ function renderShell(): string {
       const classes = ["tab", record.windowId === currentWindowId ? "current" : "", record.stale ? "stale" : ""].filter(Boolean).join(" ");
       return '<div class="' + classes + '" draggable="true" data-window-id="' + escapeHtml(record.windowId) + '">' +
         '<span class="dot" style="--tab-color:' + escapeHtml(record.color) + '"></span>' +
-        '<input class="alias" data-window-id="' + escapeHtml(record.windowId) + '" value="' + escapeHtml(record.title) + '" title="' + escapeHtml(record.meta) + '">' +
+        '<span class="alias" title="' + escapeHtml(record.meta) + '">#' + escapeHtml(record.title) + '</span>' +
         '<span class="actions">' +
-        '<button class="icon color-button" title="颜色" data-window-id="' + escapeHtml(record.windowId) + '">●</button>' +
         (record.stale ? '<button class="icon close" title="删除记录" data-window-id="' + escapeHtml(record.windowId) + '">×</button>' : '') +
         '</span>' +
         '</div>';
@@ -385,6 +393,10 @@ function renderShell(): string {
           if (event.target.closest("input") || event.target.closest("button")) return;
           const record = findWindow(tab.dataset.windowId);
           vscode.postMessage({ type: record && record.stale ? "open" : "focus", windowId: tab.dataset.windowId });
+        });
+        tab.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          showContextMenu(tab.dataset.windowId, event.clientX, event.clientY);
         });
         tab.addEventListener("dragstart", (event) => {
           draggedWindowId = tab.dataset.windowId;
@@ -431,22 +443,6 @@ function renderShell(): string {
           render();
         });
       });
-      document.querySelectorAll(".alias").forEach((input) => {
-        input.addEventListener("focus", () => editingWindowId = input.dataset.windowId);
-        input.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") input.blur();
-        });
-        input.addEventListener("blur", () => {
-          editingWindowId = "";
-          vscode.postMessage({ type: "rename", windowId: input.dataset.windowId, alias: input.value.trim() });
-        });
-      });
-      document.querySelectorAll(".color-button").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          showColorMenu(button.dataset.windowId, button.getBoundingClientRect());
-        });
-      });
       document.querySelectorAll(".close").forEach((button) => {
         button.addEventListener("click", (event) => {
           event.stopPropagation();
@@ -480,18 +476,40 @@ function renderShell(): string {
       });
     }
 
-    function showColorMenu(windowId, rect) {
-      colorMenu.innerHTML = colors.map((color) =>
-        '<button class="swatch" style="--swatch:' + escapeHtml(color) + '" data-window-id="' + escapeHtml(windowId) + '" data-color="' + escapeHtml(color) + '"></button>'
-      ).join("");
-      colorMenu.style.left = Math.min(rect.left, window.innerWidth - 120) + "px";
-      colorMenu.style.top = (rect.bottom + 4) + "px";
-      colorMenu.classList.add("open");
-      colorMenu.querySelectorAll(".swatch").forEach((button) => {
+    function showContextMenu(windowId, x, y) {
+      const record = findWindow(windowId);
+      contextMenu.innerHTML =
+        '<button class="menu-item rename" data-window-id="' + escapeHtml(windowId) + '">重命名</button>' +
+        '<button class="menu-item remove" data-window-id="' + escapeHtml(windowId) + '">删除记录</button>' +
+        '<div class="palette">' + colors.map((color) =>
+          '<button class="swatch" title="' + escapeHtml(color) + '" style="--swatch:' + escapeHtml(color) + '" data-window-id="' + escapeHtml(windowId) + '" data-color="' + escapeHtml(color) + '"></button>'
+        ).join("") + '</div>';
+      contextMenu.style.left = Math.min(x, window.innerWidth - 190) + "px";
+      contextMenu.style.top = Math.min(y, window.innerHeight - 160) + "px";
+      contextMenu.classList.add("open");
+      contextMenu.querySelector(".rename").addEventListener("click", (event) => {
+        event.stopPropagation();
+        contextMenu.classList.remove("open");
+        const alias = prompt("窗口名称", record ? record.title : "");
+        if (alias !== null) {
+          vscode.postMessage({ type: "rename", windowId, alias: alias.trim() });
+        }
+      });
+      contextMenu.querySelector(".remove").addEventListener("click", (event) => {
+        event.stopPropagation();
+        contextMenu.classList.remove("open");
+        removeFromLayout(windowId);
+        vscode.postMessage({ type: "remove", windowId });
+        render();
+      });
+      contextMenu.querySelectorAll(".swatch").forEach((button) => {
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           vscode.postMessage({ type: "color", windowId: button.dataset.windowId, color: button.dataset.color });
-          colorMenu.classList.remove("open");
+          const item = findWindow(button.dataset.windowId);
+          if (item) item.color = button.dataset.color;
+          contextMenu.classList.remove("open");
+          render();
         });
       });
     }

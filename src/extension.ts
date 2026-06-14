@@ -22,7 +22,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   await ensureTitleToken();
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.command = "windowDeck.openPanel";
+  statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
   deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
@@ -85,6 +85,11 @@ async function openPanel(): Promise<void> {
 async function heartbeat(): Promise<void> {
   const staleAfterMs = getConfigNumber("staleAfterMs") || 20000;
   const data = await registry.read();
+  for (const record of applyStaleState(data.windows, staleAfterMs, currentWindowId)) {
+    if (record.state.stale && record.workspaceKind === "empty") {
+      await registry.removeWindow(record.windowId);
+    }
+  }
   const previous = data.windows.find((record) => record.windowId === currentWindowId);
   const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous);
   await registry.upsertWindow(record);
@@ -99,17 +104,20 @@ async function showWindows(): Promise<void> {
   const items = windows.map((record) => toQuickPickItem(record));
   const selected = await vscode.window.showQuickPick(items, {
     title: "Window Deck",
-    placeHolder: "选择要切换到的 VS Code 窗口"
+    placeHolder: "选择窗口切换；失联窗口会尝试重新打开"
   });
   if (!selected) {
     return;
   }
   if (selected.record.windowId === currentWindowId) {
-    await configureCurrentWindow();
     return;
   }
-  const result = await focusWindow(selected.record);
-  await handleFocusResult(selected.record.windowId, result);
+  if (selected.record.state.stale) {
+    await openWindow(selected.record.windowId);
+  } else {
+    const result = await focusWindow(selected.record);
+    await handleFocusResult(selected.record.windowId, result);
+  }
 }
 
 async function renameCurrentWindow(): Promise<void> {
@@ -298,7 +306,7 @@ async function refreshStatus(record: WindowRecord): Promise<void> {
     `当前：${title}`,
     `Workspace：${compactPath(record.workspaceUri)}`,
     `远程：${remoteLabel(record)}`,
-    "点击打开窗口面板"
+    "点击显示窗口下拉列表"
   ].join("\n");
   statusBarItem.show();
 }

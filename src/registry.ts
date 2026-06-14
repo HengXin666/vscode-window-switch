@@ -78,7 +78,12 @@ export class Registry {
     await this.update((data) => {
       const cutoff = Date.now() - removeStaleAfterMs;
       const before = data.windows.length;
-      data.windows = data.windows.filter((record) => !record.state.stale || record.state.lastSeenAt >= cutoff);
+      data.windows = data.windows.filter((record) => {
+        if (record.state.stale && record.workspaceKind === "empty") {
+          return false;
+        }
+        return !record.state.stale || record.state.lastSeenAt >= cutoff;
+      });
       removed = before - data.windows.length;
       data.layout = normalizeLayout(data.layout, data.windows.map((item) => item.windowId));
     });

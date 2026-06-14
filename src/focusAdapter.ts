@@ -181,9 +181,11 @@ function escapeAppleScript(value: string): string {
 }
 
 function candidateTitles(record: WindowRecord): string[] {
-  return [record.titleToken, record.alias, record.workspaceName]
+  const pathName = record.workspaceUri?.split("/").filter(Boolean).pop();
+  return [record.titleToken, record.alias, record.workspaceName, pathName]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
+    .map((value) => value.trim())
+    .filter((value, index, all) => all.indexOf(value) === index);
 }
 
 function waylandUnsupportedResult(): FocusResult {
