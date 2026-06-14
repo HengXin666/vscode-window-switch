@@ -3,7 +3,7 @@
   const COLORS = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
   let state = { windows: [], layout: { order: [], groups: [] }, currentWindowId: "" };
   let open = false;
-  let draggedWindowId = "";
+  let dragState = null;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -27,6 +27,7 @@
     .window-deck-palette { display: grid; grid-template-columns: repeat(8, 18px); gap: 5px; padding: 6px 4px 3px; }
     .window-deck-swatch { width: 18px !important; min-height: 18px !important; padding: 0 !important; background: var(--wd-color) !important; border: 1px solid var(--vscode-contrastBorder) !important; }
     .window-deck-group { margin: 5px 0; border: 1px solid var(--vscode-widget-border); border-radius: 6px; overflow: hidden; }
+    .window-deck-group.window-deck-drop-into { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
     .window-deck-group-head { display: flex; gap: 6px; align-items: center; min-height: 28px; padding: 4px 7px; cursor: pointer; background: var(--vscode-sideBar-background); }
     .window-deck-group-title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .window-deck-group.collapsed .window-deck-group-body { display: none; }
@@ -104,7 +105,7 @@
     const items = group.windowIds.map(id => byId.get(id)).filter(Boolean);
     const title = group.title || items.map(w => w.title).join(" / ") || "分组";
     return `<section class="window-deck-group ${group.collapsed ? "collapsed" : ""}" data-group-id="${esc(group.id)}">
-      <div class="window-deck-group-head"><span>${group.collapsed ? "›" : "⌄"}</span><span class="window-deck-group-title">${esc(title)}</span><button class="window-deck-x" data-ungroup="${esc(group.id)}">×</button></div>
+      <div class="window-deck-group-head" draggable="true" data-group-id="${esc(group.id)}"><span>${group.collapsed ? "›" : "⌄"}</span><span class="window-deck-group-title">${esc(title)}</span><button class="window-deck-x" data-ungroup="${esc(group.id)}">×</button></div>
       <div class="window-deck-group-body">${items.map(renderRow).join("")}</div>
     </section>`;
   }
@@ -123,16 +124,28 @@
         const w = findWindow(row.dataset.windowId);
         action({ type: w && w.stale ? "open" : "focus", windowId: row.dataset.windowId });
       });
+      row.addEventListener("pointerdown", event => {
+        if (event.button !== 2) return;
+        event.preventDefault();
+        event.stopPropagation();
+        showMenu(row.dataset.windowId, event.clientX, event.clientY);
+      }, true);
       row.addEventListener("contextmenu", event => {
         event.preventDefault();
+        event.stopPropagation();
         showMenu(row.dataset.windowId, event.clientX, event.clientY);
-      });
+      }, true);
       row.addEventListener("dragstart", event => {
-        draggedWindowId = row.dataset.windowId;
+        dragState = { type: "window", windowId: row.dataset.windowId };
         event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", row.dataset.windowId);
+      });
+      row.addEventListener("dragend", () => {
+        dragState = null;
+        clearDropClasses(scope);
       });
       row.addEventListener("dragover", event => {
-        if (!draggedWindowId || draggedWindowId === row.dataset.windowId) return;
+        if (!dragState || dragState.windowId === row.dataset.windowId) return;
         event.preventDefault();
         row.classList.toggle("window-deck-drop-merge", event.offsetX > row.clientWidth * .35 && event.offsetX < row.clientWidth * .75);
         row.classList.toggle("window-deck-drop-before", event.offsetX <= row.clientWidth * .35);
@@ -141,9 +154,47 @@
       row.addEventListener("drop", event => {
         event.preventDefault();
         const merge = event.offsetX > row.clientWidth * .35 && event.offsetX < row.clientWidth * .75;
-        if (merge) mergeWindows(draggedWindowId, row.dataset.windowId);
-        else moveBefore(draggedWindowId, row.dataset.windowId);
-        draggedWindowId = "";
+        if (merge) mergeWindows(dragState.windowId, row.dataset.windowId);
+        else moveBefore(dragState.windowId, row.dataset.windowId);
+        dragState = null;
+        saveLayout();
+      });
+    });
+    scope.querySelectorAll(".window-deck-group").forEach(group => {
+      group.addEventListener("dragover", event => {
+        if (!dragState) return;
+        event.preventDefault();
+        group.classList.add("window-deck-drop-into");
+      });
+      group.addEventListener("dragleave", () => group.classList.remove("window-deck-drop-into"));
+      group.addEventListener("drop", event => {
+        if (!dragState) return;
+        event.preventDefault();
+        group.classList.remove("window-deck-drop-into");
+        addWindowToGroup(dragState.windowId, group.dataset.groupId);
+        dragState = null;
+        saveLayout();
+      });
+    });
+    scope.querySelectorAll(".window-deck-group-head").forEach(head => {
+      head.addEventListener("dragstart", event => {
+        dragState = { type: "group", groupId: head.dataset.groupId, windowId: firstWindowInGroup(head.dataset.groupId) };
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", dragState.windowId || "");
+      });
+      head.addEventListener("dragover", event => {
+        if (!dragState) return;
+        event.preventDefault();
+        head.parentElement.classList.add("window-deck-drop-before");
+      });
+      head.addEventListener("dragleave", () => head.parentElement.classList.remove("window-deck-drop-before"));
+      head.addEventListener("drop", event => {
+        if (!dragState) return;
+        event.preventDefault();
+        head.parentElement.classList.remove("window-deck-drop-before");
+        if (dragState.type === "window") addWindowToGroup(dragState.windowId, head.dataset.groupId);
+        else moveGroupBefore(dragState.groupId, head.dataset.groupId);
+        dragState = null;
         saveLayout();
       });
     });
@@ -199,13 +250,31 @@
     if (!sourceId || !targetId || sourceId === targetId) return;
     const existing = (state.layout.groups || []).find(g => g.windowIds.includes(targetId));
     removeFromGroups(sourceId);
-    if (existing) existing.windowIds = [...new Set([...existing.windowIds, sourceId])];
+      if (existing) existing.windowIds = [...new Set([...existing.windowIds, sourceId])];
     else {
       const s = findWindow(sourceId), t = findWindow(targetId);
       state.layout.groups.push({ id: "group-" + Date.now().toString(36), title: [t && t.title, s && s.title].filter(Boolean).join(" / "), color: t && t.color, collapsed: false, windowIds: [targetId, sourceId] });
     }
     state.layout.order = state.layout.order.filter(id => id !== sourceId);
     if (!state.layout.order.includes(targetId)) state.layout.order.push(targetId);
+  }
+  function addWindowToGroup(windowId, groupId) {
+    if (!windowId || !groupId) return;
+    const group = state.layout.groups.find(g => g.id === groupId);
+    if (!group || group.windowIds.includes(windowId)) return;
+    removeFromGroups(windowId);
+    group.windowIds.push(windowId);
+    group.collapsed = false;
+    state.layout.order = state.layout.order.filter(id => id !== windowId);
+  }
+  function moveGroupBefore(sourceGroupId, targetGroupId) {
+    if (!sourceGroupId || !targetGroupId || sourceGroupId === targetGroupId) return;
+    const sourceFirst = firstWindowInGroup(sourceGroupId);
+    const targetFirst = firstWindowInGroup(targetGroupId);
+    if (!sourceFirst || !targetFirst) return;
+    state.layout.order = state.layout.order.filter(id => id !== sourceFirst);
+    const index = Math.max(0, state.layout.order.indexOf(targetFirst));
+    state.layout.order.splice(index, 0, sourceFirst);
   }
   function removeFromGroups(windowId) {
     state.layout.groups = (state.layout.groups || []).map(g => ({ ...g, windowIds: g.windowIds.filter(id => id !== windowId) })).filter(g => g.windowIds.length);
@@ -222,6 +291,15 @@
       state.layout.order = state.layout.order.filter(id => !group.windowIds.includes(id));
       state.layout.order.splice(at, 0, ...group.windowIds);
     }
+  }
+  function firstWindowInGroup(groupId) {
+    const group = state.layout.groups.find(g => g.id === groupId);
+    return group && group.windowIds[0] || "";
+  }
+  function clearDropClasses(scope) {
+    scope.querySelectorAll(".window-deck-drop-before,.window-deck-drop-merge,.window-deck-drop-into").forEach(el => {
+      el.classList.remove("window-deck-drop-before", "window-deck-drop-merge", "window-deck-drop-into");
+    });
   }
   function saveLayout() {
     action({ type: "layout", layout: state.layout });
