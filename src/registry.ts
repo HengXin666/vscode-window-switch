@@ -10,7 +10,8 @@ const emptyRegistry = (): RegistryData => ({
   layout: {
     order: [],
     groups: []
-  }
+  },
+  reloadRequest: undefined
 });
 
 export class Registry {
@@ -28,7 +29,8 @@ export class Registry {
         version: 1,
         windows: Array.isArray(parsed.windows) ? parsed.windows : [],
         userConfigs: Array.isArray(parsed.userConfigs) ? parsed.userConfigs : [],
-        layout: normalizeLayout(parsed.layout)
+        layout: normalizeLayout(parsed.layout),
+        reloadRequest: normalizeReloadRequest(parsed.reloadRequest)
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -196,6 +198,17 @@ function normalizeLayout(layout?: WindowDeckLayout, knownWindowIds: string[] = [
     }))
     .filter((group) => group.windowIds.length > 0);
   return { order, groups };
+}
+
+function normalizeReloadRequest(value: unknown): RegistryData["reloadRequest"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const request = value as RegistryData["reloadRequest"];
+  if (!request || typeof request.id !== "string" || typeof request.version !== "string" || typeof request.requestedAt !== "number") {
+    return undefined;
+  }
+  return request;
 }
 
 function mergeConfig(record: WindowRecord, config?: UserWindowConfig): WindowRecord {

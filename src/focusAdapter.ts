@@ -28,7 +28,7 @@ export async function focusWindow(record: WindowRecord): Promise<FocusResult> {
 
 export function focusSupportMessage(): string {
   if (process.platform === "darwin") {
-    return "macOS: 使用 AppleScript fallback 按标题 token 聚焦。若失败，请检查系统辅助功能权限。";
+    return "macOS: 使用 AppleScript + Accessibility 按窗口标题聚焦。若失败，请在系统设置 > 隐私与安全性 中允许 VS Code 的辅助功能和自动化权限。";
   }
   if (process.platform === "linux") {
     const session = linuxSession();
@@ -51,26 +51,68 @@ function focusMac(titleCandidates: string[]): Promise<FocusResult> {
   const script = `
 tell application "System Events"
   set targetTokens to {${candidates}}
-  repeat with proc in (application processes whose name contains "Code" or name contains "Visual Studio Code")
+  set codeBundleIds to {"com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.visualstudio.code.oss", "com.vscodium"}
+  repeat with proc in application processes
+    set procName to name of proc as text
+    set procBundleId to ""
+    try
+      set procBundleId to bundle identifier of proc as text
+    end try
+    if procName contains "Code" or procName contains "Visual Studio Code" or procName contains "VSCodium" or codeBundleIds contains procBundleId then
     repeat with win in windows of proc
       repeat with targetToken in targetTokens
         if name of win contains targetToken then
           set frontmost of proc to true
+          try
+            set value of attribute "AXMain" of win to true
+          end try
           perform action "AXRaise" of win
           return "ok"
         end if
       end repeat
     end repeat
+    end if
   end repeat
 end tell
 return "not-found"
 `;
-  return execFile("osascript", ["-e", script]).then((output) => {
+  return execFile("osascript", ["-e", script]).then((output): FocusResult => {
     if (output.trim() === "ok") {
       return { ok: true };
     }
-    return { ok: false, reason: "Window Deck 找不到目标窗口。该窗口可能已关闭，或标题 token 被覆盖。" };
+    return { ok: false, reason: macNotFoundReason(titleCandidates) };
+  }).catch((error: Error): FocusResult => {
+    return { ok: false, reason: macFocusErrorReason(error) };
   });
+}
+
+function macNotFoundReason(titleCandidates: string[]): string {
+  return [
+    "Window Deck 在 macOS 中找不到匹配的 VS Code 窗口。",
+    `已尝试标题片段：${titleCandidates.join(" / ")}`,
+    "如果窗口仍打开，请运行“Window Deck: 应用窗口标题标记”后重试；若仍失败，请检查系统设置 > 隐私与安全性 > 辅助功能/自动化权限。"
+  ].join(" ");
+}
+
+function macFocusErrorReason(error: Error): string {
+  const message = error.message.trim();
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("not authorized") ||
+    lower.includes("not allowed") ||
+    lower.includes("assistive") ||
+    lower.includes("accessibility") ||
+    lower.includes("privacy") ||
+    lower.includes("1002") ||
+    lower.includes("1743")
+  ) {
+    return [
+      "macOS 拒绝了 Window Deck 的窗口聚焦请求。",
+      "请在系统设置 > 隐私与安全性 > 辅助功能 中允许 Visual Studio Code / Code - Insiders / VSCodium，并在“自动化”中允许它控制 System Events。",
+      `原始错误：${message}`
+    ].join(" ");
+  }
+  return `macOS 聚焦请求失败：${message}`;
 }
 
 async function focusLinuxX11(titleCandidates: string[]): Promise<FocusResult> {

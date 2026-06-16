@@ -118,7 +118,8 @@ function renderShell(): string {
     .row.current { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
     .row.stale { opacity: .62; }
     .dragging { opacity: .42; transform: scale(.985); }
-    .drop-before { box-shadow: 0 -2px 0 var(--vscode-focusBorder); transform: translateY(2px); }
+    .drop-before { box-shadow: 0 -2px 0 var(--vscode-focusBorder); }
+    .drop-after { box-shadow: 0 2px 0 var(--vscode-focusBorder); }
     .drop-merge, .drop-into { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; background: var(--vscode-list-hoverBackground); }
     .merge-hint { color: var(--vscode-focusBorder); font-size: 11px; font-weight: 600; margin-left: 8px; }
     .box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--item-color), #000 18%); background: var(--item-color); box-sizing: border-box; }
@@ -233,25 +234,24 @@ function renderShell(): string {
         row.addEventListener("dragover", (event) => {
           if (!dragState || dragState.windowId === row.dataset.windowId) return;
           event.preventDefault();
-          const merge = isMergeZone(event, row);
+          event.stopPropagation();
+          const drop = rowDropIntent(event, row);
           clearDropClasses();
-          if (merge && dragState.type === "window") {
+          if (drop === "merge" && dragState.type === "window") {
             row.classList.add("drop-merge");
             showMergeHint(row, groupIdForWindow(row.dataset.windowId) ? "松开加入分组" : "松开创建分组");
             return;
           }
-          row.classList.add("drop-before");
-          if (dragState.type === "window") preview(() => moveBefore(dragState.windowId, row.dataset.windowId));
-          else preview(() => moveGroupBeforeWindow(dragState.groupId, row.dataset.windowId));
+          row.classList.add(drop === "after" ? "drop-after" : "drop-before");
         });
         row.addEventListener("drop", (event) => {
           if (!dragState) return;
           event.preventDefault();
           event.stopPropagation();
-          const merge = isMergeZone(event, row);
-          if (dragState.type === "group") moveGroupBeforeWindow(dragState.groupId, row.dataset.windowId);
-          else if (merge) mergeWindows(dragState.windowId, row.dataset.windowId);
-          else moveBefore(dragState.windowId, row.dataset.windowId);
+          const drop = rowDropIntent(event, row);
+          if (dragState.type === "group") moveGroupNearWindow(dragState.groupId, row.dataset.windowId, drop === "after");
+          else if (drop === "merge") mergeWindows(dragState.windowId, row.dataset.windowId);
+          else moveNear(dragState.windowId, row.dataset.windowId, drop === "after");
           dragState.committed = true;
           saveLayout();
         });
@@ -312,11 +312,13 @@ function renderShell(): string {
 
     function showGroupMenu(groupId, x, y) {
       const group = layout.groups.find((item) => item.id === groupId);
-      menu.innerHTML = '<button data-cmd="rename">重命名分组</button><button data-cmd="collapse">展开/合上</button><button data-cmd="ungroup">取消分组</button>';
+      menu.innerHTML = '<button data-cmd="rename">重命名分组</button><button data-cmd="collapse">展开/合上</button><button data-cmd="ungroup">取消分组</button><div class="palette">' +
+        COLORS.map((color) => '<button class="swatch" title="' + esc(color) + '" data-group-color="' + esc(color) + '" style="--swatch:' + esc(color) + '"></button>').join("") + '</div>';
       placeMenu(x, y);
       menu.querySelector('[data-cmd="rename"]').onclick = () => { closeMenu(); beginRenameGroup(groupId); };
       menu.querySelector('[data-cmd="collapse"]').onclick = () => { closeMenu(); if (group) group.collapsed = !group.collapsed; saveLayout(); };
       menu.querySelector('[data-cmd="ungroup"]').onclick = () => { closeMenu(); ungroup(groupId); saveLayout(); };
+      menu.querySelectorAll("[data-group-color]").forEach((button) => button.onclick = () => { closeMenu(); setGroupColor(groupId, button.dataset.groupColor); });
     }
 
     function beginRenameWindow(windowId) {
@@ -394,12 +396,18 @@ function renderShell(): string {
       target.querySelector(".title,.group-title")?.appendChild(hint);
     }
     function clearDropClasses() {
-      deck.querySelectorAll(".drop-before,.drop-merge,.drop-into").forEach((item) => item.classList.remove("drop-before", "drop-merge", "drop-into"));
+      deck.querySelectorAll(".drop-before,.drop-after,.drop-merge,.drop-into").forEach((item) => item.classList.remove("drop-before", "drop-after", "drop-merge", "drop-into"));
       deck.querySelectorAll(".merge-hint").forEach((item) => item.remove());
     }
     function placeMenu(x, y) { menu.style.left = Math.min(x, window.innerWidth - 205) + "px"; menu.style.top = Math.min(y, window.innerHeight - 170) + "px"; menu.classList.add("open"); }
     function closeMenu() { menu.classList.remove("open"); }
-    function isMergeZone(event, row) { return event.offsetX > row.clientWidth * 0.36 && event.offsetX < row.clientWidth * 0.84; }
+    function rowDropIntent(event, row) {
+      const rect = row.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      if (x > Math.max(56, rect.width * 0.24) && x < rect.width - 34) return "merge";
+      return y > rect.height / 2 ? "after" : "before";
+    }
     function cloneLayout(value) { return JSON.parse(JSON.stringify(value)); }
 
     function normalizeLayout(next) {
@@ -417,10 +425,17 @@ function renderShell(): string {
       layout.order = layout.order.filter((id) => id !== sourceId);
       layout.order.splice(Math.max(0, layout.order.indexOf(targetId)), 0, sourceId);
     }
+    function moveNear(sourceId, targetId, after) {
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      removeFromGroups(sourceId);
+      layout.order = layout.order.filter((id) => id !== sourceId);
+      const targetIndex = layout.order.indexOf(targetId);
+      layout.order.splice(targetIndex < 0 ? layout.order.length : targetIndex + (after ? 1 : 0), 0, sourceId);
+    }
     function mergeWindows(sourceId, targetId) {
       if (!sourceId || !targetId || sourceId === targetId) return;
-      const existing = layout.groups.find((group) => group.windowIds.includes(targetId));
       removeFromGroups(sourceId);
+      const existing = layout.groups.find((group) => group.windowIds.includes(targetId));
       if (existing) existing.windowIds = dedupe([...existing.windowIds, sourceId]);
       else {
         const source = findWindow(sourceId);
@@ -438,6 +453,12 @@ function renderShell(): string {
       group.collapsed = false;
       layout.order = layout.order.filter((id) => id !== windowId);
     }
+    function setGroupColor(groupId, color) {
+      const group = layout.groups.find((item) => item.id === groupId);
+      if (!group || !color) return;
+      group.color = color;
+      saveLayout();
+    }
     function moveGroupBefore(sourceGroupId, targetGroupId) {
       if (!sourceGroupId || !targetGroupId || sourceGroupId === targetGroupId) return;
       const sourceFirst = firstWindowInGroup(sourceGroupId);
@@ -452,6 +473,14 @@ function renderShell(): string {
       if (!sourceFirst || sourceFirst === targetWindowId) return;
       layout.order = layout.order.filter((id) => id !== sourceFirst);
       layout.order.splice(Math.max(0, layout.order.indexOf(targetWindowId)), 0, sourceFirst);
+    }
+    function moveGroupNearWindow(sourceGroupId, targetWindowId, after) {
+      if (!sourceGroupId || !targetWindowId) return;
+      const sourceFirst = firstWindowInGroup(sourceGroupId);
+      if (!sourceFirst || sourceFirst === targetWindowId) return;
+      layout.order = layout.order.filter((id) => id !== sourceFirst);
+      const targetIndex = layout.order.indexOf(targetWindowId);
+      layout.order.splice(targetIndex < 0 ? layout.order.length : targetIndex + (after ? 1 : 0), 0, sourceFirst);
     }
     function removeFromGroups(windowId) { layout.groups = layout.groups.map((group) => ({ ...group, windowIds: group.windowIds.filter((id) => id !== windowId) })).filter((group) => group.windowIds.length > 0); }
     function removeFromLayout(windowId) { layout.order = layout.order.filter((id) => id !== windowId); removeFromGroups(windowId); saveLayout(); }

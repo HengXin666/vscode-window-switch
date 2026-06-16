@@ -17,9 +17,14 @@ let currentTitleToken: string;
 let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let extensionPath: string;
+let extensionVersion: string;
+let extensionContext: vscode.ExtensionContext;
+let lastHandledReloadRequestId: string | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionContext = context;
   extensionPath = context.extensionPath;
+  extensionVersion = String(context.extension.packageJSON.version ?? "unknown");
   registry = new Registry(registryDirectory(context));
   currentWindowId = `${process.pid}-${randomId(8)}`;
   currentTitleToken = context.workspaceState.get<string>("windowDeck.titleToken") ?? `WD:${randomId(3)}`;
@@ -68,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
+  await promptReloadAfterUpdate(context);
   await heartbeat();
   const interval = Math.max(1000, getConfigNumber("heartbeatIntervalMs") || 5000);
   heartbeatTimer = setInterval(() => {
@@ -123,6 +129,7 @@ async function openPanel(): Promise<void> {
 }
 
 async function heartbeat(): Promise<void> {
+  await handlePendingReloadRequest();
   const staleAfterMs = getConfigNumber("staleAfterMs") || 20000;
   const data = await registry.read();
   for (const record of applyStaleState(data.windows, staleAfterMs, currentWindowId)) {
@@ -134,6 +141,60 @@ async function heartbeat(): Promise<void> {
   const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous);
   await registry.upsertWindow(record);
   await refreshStatus(record);
+}
+
+async function promptReloadAfterUpdate(context: vscode.ExtensionContext): Promise<void> {
+  const previousVersion = context.globalState.get<string>("windowDeck.lastActivatedVersion");
+  if (!previousVersion || previousVersion === extensionVersion) {
+    await context.globalState.update("windowDeck.lastActivatedVersion", extensionVersion);
+    return;
+  }
+  const picked = await vscode.window.showInformationMessage(
+    `Window Deck 已从 ${previousVersion} 更新到 ${extensionVersion}。是否重启所有 VS Code 窗口以加载新版本？`,
+    "重启所有窗口",
+    "稍后"
+  );
+  if (picked !== "重启所有窗口") {
+    return;
+  }
+  await context.globalState.update("windowDeck.lastActivatedVersion", extensionVersion);
+  const requestId = `${Date.now()}-${randomId(4)}`;
+  await registry.update((data) => {
+    data.reloadRequest = {
+      id: requestId,
+      version: extensionVersion,
+      requestedAt: Date.now()
+    };
+  });
+  lastHandledReloadRequestId = requestId;
+  await setReloadRequestSeenIds([...(await getReloadRequestSeenIds()), requestId].slice(-10));
+  await vscode.commands.executeCommand("workbench.action.reloadWindow");
+}
+
+async function handlePendingReloadRequest(): Promise<void> {
+  const data = await registry.read();
+  const request = data.reloadRequest;
+  if (!request || request.id === lastHandledReloadRequestId) {
+    return;
+  }
+  lastHandledReloadRequestId = request.id;
+  const lastSeen = await getReloadRequestSeenIds();
+  if (lastSeen.includes(request.id)) {
+    return;
+  }
+  await setReloadRequestSeenIds([...lastSeen, request.id].slice(-10));
+  if (Date.now() - request.requestedAt > 10 * 60 * 1000) {
+    return;
+  }
+  await vscode.commands.executeCommand("workbench.action.reloadWindow");
+}
+
+async function getReloadRequestSeenIds(): Promise<string[]> {
+  return extensionContext.workspaceState.get<string[]>("windowDeck.reloadRequestSeenIds") ?? [];
+}
+
+async function setReloadRequestSeenIds(ids: string[]): Promise<void> {
+  await extensionContext.workspaceState.update("windowDeck.reloadRequestSeenIds", ids);
 }
 
 async function showWindows(): Promise<void> {

@@ -64,11 +64,18 @@ export type WindowDeckLayout = {
   groups: WindowDeckGroup[];
 };
 
+export type WindowDeckReloadRequest = {
+  id: string;
+  version: string;
+  requestedAt: number;
+};
+
 export type RegistryData = {
   version: 1;
   windows: WindowRecord[];
   userConfigs: UserWindowConfig[];
   layout: WindowDeckLayout;
+  reloadRequest?: WindowDeckReloadRequest;
 };
 
 export type FocusResult =
