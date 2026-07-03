@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -131,6 +131,11 @@
           "type": "boolean",
           "default": true,
           "description": "在 KDE Wayland 下自动写入当前 workspace 的 window.title 标记，让 KWin 更可靠地聚焦窗口。"
+        },
+        "windowDeck.autoApplyTitleMarkerOnMacOS": {
+          "type": "boolean",
+          "default": true,
+          "description": "在 macOS 下自动写入当前 workspace 的 window.title 标记，让 AppleScript 能可靠匹配并切换 VS Code 窗口。"
         }
       }
     },

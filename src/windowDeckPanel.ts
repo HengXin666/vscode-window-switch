@@ -72,10 +72,14 @@ export class WindowDeckPanel {
     const visible = visibleWindowRecords(staleAware);
     const layout = normalizeVisibleLayout(data.layout, visible);
     const ordered = orderVisibleRecords(visible, layout);
+    const displayLayout = {
+      ...layout,
+      order: ordered.map((record) => record.windowId)
+    };
     await this.panel.webview.postMessage({
       type: "windows",
       windows: ordered.map(toViewModel),
-      layout,
+      layout: displayLayout,
       currentWindowId: this.currentWindowId()
     });
   }

@@ -80,9 +80,13 @@ export class BridgeServer implements vscode.Disposable {
         const visible = visibleWindowRecords(applyStaleState(data.windows, this.staleAfterMs(), this.currentWindowId()));
         const layout = normalizeVisibleLayout(data.layout, visible);
         const windows = orderVisibleRecords(visible, layout);
+        const displayLayout = {
+          ...layout,
+          order: windows.map((record) => record.windowId)
+        };
         this.json(response, {
           currentWindowId: this.currentWindowId(),
-          layout,
+          layout: displayLayout,
           windows: windows.map(toBridgeRecord)
         });
         return;

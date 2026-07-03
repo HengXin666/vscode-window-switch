@@ -64,6 +64,9 @@ export function orderVisibleRecords(records: WindowRecord[], layout: WindowDeckL
     if (a.state.stale !== b.state.stale) {
       return a.state.stale ? 1 : -1;
     }
+    if (a.state.stale && b.state.stale && a.state.lastSeenAt !== b.state.lastSeenAt) {
+      return b.state.lastSeenAt - a.state.lastSeenAt;
+    }
     const aIndex = position.get(a.windowId) ?? Number.MAX_SAFE_INTEGER;
     const bIndex = position.get(b.windowId) ?? Number.MAX_SAFE_INTEGER;
     if (aIndex !== bIndex) {
@@ -87,7 +90,8 @@ function workspaceKey(record: WindowRecord): string | undefined {
 
 function rankRecord(record: WindowRecord): number {
   const activeScore = record.state.stale ? 0 : 1_000_000_000_000_000;
-  return activeScore + (record.state.lastFocusedAt ?? record.state.lastSeenAt);
+  const activityTime = record.state.stale ? record.state.lastSeenAt : (record.state.lastFocusedAt ?? record.state.lastSeenAt);
+  return activeScore + activityTime;
 }
 
 function dedupe(values: string[]): string[] {

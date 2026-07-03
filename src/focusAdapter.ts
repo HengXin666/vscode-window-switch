@@ -2,6 +2,7 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vscode from "vscode";
 
 import { FocusResult, WindowRecord } from "./types";
 import { desktopEnvironment, linuxSession } from "./util";
@@ -47,29 +48,68 @@ export function focusSupportMessage(): string {
 }
 
 function focusMac(titleCandidates: string[]): Promise<FocusResult> {
-  const candidates = titleCandidates.map(escapeAppleScript).map((item) => `"${item}"`).join(", ");
+  const candidates = appleScriptList(titleCandidates);
+  const appNames = appleScriptList(macApplicationNameCandidates());
   const script = `
+on containsAny(valueText, needles)
+  repeat with needle in needles
+    set needleText to contents of needle as text
+    if needleText is not "" then
+      if valueText contains needleText then
+        return true
+      end if
+    end if
+  end repeat
+  return false
+end containsAny
+
 tell application "System Events"
   set targetTokens to {${candidates}}
-  repeat with proc in (application processes whose name contains "Code" or name contains "Visual Studio Code")
-    repeat with win in windows of proc
-      repeat with targetToken in targetTokens
-        if name of win contains targetToken then
-          set frontmost of proc to true
-          perform action "AXRaise" of win
-          return "ok"
-        end if
+  set targetProcessNames to {${appNames}}
+  repeat with proc in (application processes whose background only is false)
+    set procName to name of proc as text
+    if my containsAny(procName, targetProcessNames) then
+      repeat with win in windows of proc
+        set winName to ""
+        try
+          set winName to name of win as text
+        end try
+        repeat with targetToken in targetTokens
+          if winName contains (contents of targetToken as text) then
+            try
+              set value of attribute "AXMinimized" of win to false
+            end try
+            try
+              set frontmost of proc to true
+            end try
+            try
+              perform action "AXRaise" of win
+            end try
+            try
+              set value of attribute "AXMain" of win to true
+            end try
+            try
+              set value of attribute "AXFocused" of win to true
+            end try
+            return "ok"
+          end if
+        end repeat
       end repeat
-    end repeat
+    end if
   end repeat
 end tell
 return "not-found"
 `;
-  return execFile("osascript", ["-e", script]).then((output) => {
+  return execFile("osascript", ["-e", script]).then((output): FocusResult => {
     if (output.trim() === "ok") {
       return { ok: true };
     }
     return { ok: false, reason: "Window Deck 找不到目标窗口。该窗口可能已关闭，或标题 token 被覆盖。" };
+  }).catch((error: Error): FocusResult => {
+    return {
+      ok: false,
+      reason: `macOS 聚焦请求失败：${error.message}。请确认 VS Code 已获得“系统设置 > 隐私与安全性 > 辅助功能”权限。`
+    };
   });
 }
 
@@ -180,12 +220,34 @@ function escapeAppleScript(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function appleScriptList(values: string[]): string {
+  return values.map(escapeAppleScript).map((item) => `"${item}"`).join(", ");
+}
+
+function macApplicationNameCandidates(): string[] {
+  return dedupe([
+    vscode.env.appName,
+    "Visual Studio Code",
+    "Visual Studio Code - Insiders",
+    "Code",
+    "Code - Insiders",
+    "Code - OSS",
+    "VSCodium",
+    "Cursor",
+    "Windsurf"
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()));
+}
+
 function candidateTitles(record: WindowRecord): string[] {
   const pathName = record.workspaceUri?.split("/").filter(Boolean).pop();
   return [record.titleToken, record.alias, record.workspaceName, pathName]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim())
     .filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function dedupe(values: string[]): string[] {
+  return values.filter((value, index, all) => all.indexOf(value) === index);
 }
 
 function waylandUnsupportedResult(): FocusResult {

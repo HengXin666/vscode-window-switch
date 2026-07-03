@@ -22,8 +22,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionPath = context.extensionPath;
   registry = new Registry(registryDirectory(context));
   currentWindowId = `${process.pid}-${randomId(8)}`;
-  currentTitleToken = context.workspaceState.get<string>("windowDeck.titleToken") ?? `WD:${randomId(3)}`;
-  await context.workspaceState.update("windowDeck.titleToken", currentTitleToken);
+  currentTitleToken = `WD:${randomId(5)}`;
 
   await ensureTitleToken();
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -69,10 +68,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   await heartbeat();
+  void promptReloadAfterInstall(context);
   const interval = Math.max(1000, getConfigNumber("heartbeatIntervalMs") || 5000);
   heartbeatTimer = setInterval(() => {
     void heartbeat();
   }, interval);
+}
+
+async function promptReloadAfterInstall(context: vscode.ExtensionContext): Promise<void> {
+  const version = extensionVersion(context);
+  const promptKey = "windowDeck.reloadPromptVersion";
+  if (context.workspaceState.get<string>(promptKey) === version) {
+    return;
+  }
+  await context.workspaceState.update(promptKey, version);
+  const picked = await vscode.window.showInformationMessage(
+    "Window Deck 已安装或更新。请在所有 VS Code 窗口中分别重新加载一次，以启用最新的窗口切换和标题标记。",
+    "重新加载当前窗口",
+    "稍后"
+  );
+  if (picked === "重新加载当前窗口") {
+    await vscode.commands.executeCommand("workbench.action.reloadWindow");
+  }
+}
+
+function extensionVersion(context: vscode.ExtensionContext): string {
+  const packageJson = context.extension.packageJSON as { version?: unknown };
+  return typeof packageJson.version === "string" ? packageJson.version : "unknown";
 }
 
 async function installWorkbenchPatch(): Promise<void> {
@@ -412,7 +434,9 @@ async function diagnoseFocusSupport(): Promise<void> {
 }
 
 async function ensureTitleToken(): Promise<void> {
-  if (process.platform === "linux" && linuxSession() === "wayland" && desktopEnvironment() === "kde" && getConfigBoolean("autoApplyTitleMarkerOnKdeWayland")) {
+  const shouldAutoApplyOnMacOS = process.platform === "darwin" && getConfigBoolean("autoApplyTitleMarkerOnMacOS");
+  const shouldAutoApplyOnKdeWayland = process.platform === "linux" && linuxSession() === "wayland" && desktopEnvironment() === "kde" && getConfigBoolean("autoApplyTitleMarkerOnKdeWayland");
+  if (shouldAutoApplyOnMacOS || shouldAutoApplyOnKdeWayland) {
     await applyCurrentWindowTitle({ silent: true });
     return;
   }
