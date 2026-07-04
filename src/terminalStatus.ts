@@ -4,10 +4,13 @@ import * as vscode from "vscode";
 
 import { TerminalActivityState, WindowTerminalRecord } from "./types";
 
-const runningQuietMs = 8000;
+const outputQuietMs = 6000;
+const processActivityQuietMs = 12000;
+const promptSettledMs = 1500;
 const processProbeTimeoutMs = 800;
 const terminalProcessIdTimeoutMs = 250;
 const maxCommandLineLength = 220;
+const maxOutputTailLength = 2000;
 
 type ProcessRow = {
   pid: number;
@@ -24,6 +27,7 @@ type TrackedTerminal = {
   commandLine?: string;
   activeSince?: number;
   lastOutputAt?: number;
+  outputTail: string;
   processId?: number;
   fallbackHasCommand: boolean;
   fallbackCommandLine?: string;
@@ -106,6 +110,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
         terminal,
         id: `term-${process.pid}-${this.nextId++}`,
         executionSeq: 0,
+        outputTail: "",
         fallbackHasCommand: false
       };
       this.terminals.set(terminal, tracked);
@@ -121,6 +126,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
     tracked.commandLine = cleanCommandLine(execution.commandLine.value);
     tracked.activeSince = seenAt;
     tracked.lastOutputAt = seenAt;
+    tracked.outputTail = "";
     void this.readExecutionOutput(terminal, execution, tracked.executionSeq);
   }
 
@@ -133,6 +139,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
     tracked.commandLine = undefined;
     tracked.activeSince = undefined;
     tracked.lastOutputAt = undefined;
+    tracked.outputTail = "";
   }
 
   private async readExecutionOutput(terminal: vscode.Terminal, execution: vscode.TerminalShellExecution, executionSeq: number): Promise<void> {
@@ -142,8 +149,9 @@ export class TerminalStatusTracker implements vscode.Disposable {
         if (!tracked || tracked.executionSeq !== executionSeq) {
           break;
         }
-        if (chunk.length > 0) {
+        if (hasVisibleOutput(chunk)) {
           tracked.lastOutputAt = Date.now();
+          tracked.outputTail = appendOutputTail(tracked.outputTail, chunk);
         }
       }
     } catch {
@@ -208,8 +216,18 @@ export class TerminalStatusTracker implements vscode.Disposable {
     if (!hasActiveCommand) {
       return "idle";
     }
-    const lastActivityAt = Math.max(tracked.lastOutputAt ?? 0, tracked.fallbackLastActivityAt ?? 0, tracked.activeSince ?? 0);
-    return seenAt - lastActivityAt <= runningQuietMs ? "running" : "waitingInput";
+    const lastOutputAt = tracked.lastOutputAt ?? 0;
+    if (lastOutputAt > 0 && looksLikeWaitingPrompt(tracked.outputTail) && seenAt - lastOutputAt >= promptSettledMs) {
+      return "waitingInput";
+    }
+    if (lastOutputAt > 0 && seenAt - lastOutputAt <= outputQuietMs) {
+      return "running";
+    }
+    const lastProcessActivityAt = tracked.fallbackLastActivityAt ?? 0;
+    if (lastProcessActivityAt > 0 && seenAt - lastProcessActivityAt <= processActivityQuietMs) {
+      return "running";
+    }
+    return "waitingInput";
   }
 }
 
@@ -302,6 +320,109 @@ function cleanCommandLine(commandLine: string | undefined): string | undefined {
     return undefined;
   }
   return cleaned.length > maxCommandLineLength ? `${cleaned.slice(0, maxCommandLineLength - 1)}...` : cleaned;
+}
+
+function appendOutputTail(current: string, chunk: string): string {
+  const next = `${current}${stripAnsi(chunk)}`;
+  return next.length > maxOutputTailLength ? next.slice(next.length - maxOutputTailLength) : next;
+}
+
+function hasVisibleOutput(chunk: string): boolean {
+  let printable = "";
+  for (const char of stripAnsi(chunk)) {
+    const code = char.codePointAt(0) ?? 0;
+    if (!isControlCode(code)) {
+      printable += char;
+    }
+  }
+  return printable.trim().length > 0;
+}
+
+function stripAnsi(value: string): string {
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 0x1b) {
+      output += value[index];
+      continue;
+    }
+    index = skipEscapeSequence(value, index);
+  }
+  return output;
+}
+
+function skipEscapeSequence(value: string, escapeIndex: number): number {
+  const introducer = value[escapeIndex + 1];
+  if (!introducer) {
+    return escapeIndex;
+  }
+  if (introducer === "[") {
+    return skipUntil(value, escapeIndex + 2, isCsiFinalByte);
+  }
+  if (introducer === "]") {
+    return skipUntilTerminator(value, escapeIndex + 2, 0x07);
+  }
+  if (introducer === "P" || introducer === "X" || introducer === "^" || introducer === "_") {
+    return skipUntilStringTerminator(value, escapeIndex + 2);
+  }
+  return escapeIndex + 1;
+}
+
+function skipUntil(value: string, start: number, predicate: (code: number) => boolean): number {
+  for (let index = start; index < value.length; index += 1) {
+    if (predicate(value.charCodeAt(index))) {
+      return index;
+    }
+  }
+  return value.length - 1;
+}
+
+function skipUntilTerminator(value: string, start: number, terminator: number): number {
+  for (let index = start; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === terminator) {
+      return index;
+    }
+    if (value.charCodeAt(index) === 0x1b && value[index + 1] === "\\") {
+      return index + 1;
+    }
+  }
+  return value.length - 1;
+}
+
+function skipUntilStringTerminator(value: string, start: number): number {
+  for (let index = start; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 0x1b && value[index + 1] === "\\") {
+      return index + 1;
+    }
+  }
+  return value.length - 1;
+}
+
+function isCsiFinalByte(code: number): boolean {
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function isControlCode(code: number): boolean {
+  return code < 0x20 || code === 0x7f;
+}
+
+function looksLikeWaitingPrompt(outputTail: string): boolean {
+  const normalized = outputTail
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-4)
+    .join("\n");
+  if (!normalized) {
+    return false;
+  }
+  return [
+    /(?:^|\n)(?:>|›|❯|\?)\s*$/u,
+    /(?:^|\n)(?:you|user|human)\s*:\s*$/iu,
+    /(?:^|\n)(?:prompt|message|input)\s*[:>]\s*$/iu,
+    /(?:waiting|awaiting|ready).{0,32}(?:input|message|prompt)/iu,
+    /(?:press|type).{0,32}(?:enter|return|y\/n|yes|no)/iu,
+    /(?:do you want to|continue\?|proceed\?)/iu
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function execFile(file: string, args: string[], timeout: number): Promise<string> {

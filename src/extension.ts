@@ -534,7 +534,7 @@ function terminalQuickPickSummary(terminals: WindowTerminalRecord[] | undefined)
   if (items.length === 0) {
     return undefined;
   }
-  return items.map((terminal, index) => `${terminalCodicon(terminal.state)} ${index + 1}:${terminalDisplayText(terminal)}`).join("  ");
+  return items.map((terminal, index) => `${terminalCodicon(terminal.state)}${index + 1}`).join(" ");
 }
 
 function terminalQuickPickDetail(terminals: WindowTerminalRecord[] | undefined): string | undefined {
@@ -542,25 +542,24 @@ function terminalQuickPickDetail(terminals: WindowTerminalRecord[] | undefined):
   if (items.length === 0) {
     return undefined;
   }
-  return `终端：${items.map((terminal, index) => `${index + 1}. ${terminalStateLabel(terminal.state)} ${terminalDisplayText(terminal)}`).join("  ")}`;
+  const counts = countTerminalsByState(items);
+  const summary = [
+    counts.running > 0 ? `${counts.running} 运行中` : undefined,
+    counts.waitingInput > 0 ? `${counts.waitingInput} 等待输入` : undefined,
+    counts.idle > 0 ? `${counts.idle} 空闲` : undefined
+  ].filter(Boolean).join(" · ");
+  return `终端：${summary}`;
 }
 
 function sortedTerminals(terminals: WindowTerminalRecord[] | undefined): WindowTerminalRecord[] {
   return [...(terminals ?? [])].sort((a, b) => a.order - b.order);
 }
 
-function terminalDisplayText(terminal: WindowTerminalRecord): string {
-  return terminal.commandLine || terminal.name || terminal.shell || "terminal";
-}
-
-function terminalStateLabel(state: WindowTerminalRecord["state"]): string {
-  if (state === "running") {
-    return "运行中";
-  }
-  if (state === "waitingInput") {
-    return "等待输入";
-  }
-  return "空闲";
+function countTerminalsByState(terminals: WindowTerminalRecord[]): Record<WindowTerminalRecord["state"], number> {
+  return terminals.reduce<Record<WindowTerminalRecord["state"], number>>((counts, terminal) => {
+    counts[terminal.state] += 1;
+    return counts;
+  }, { running: 0, waitingInput: 0, idle: 0 });
 }
 
 function terminalCodicon(state: WindowTerminalRecord["state"]): string {

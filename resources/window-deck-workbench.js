@@ -25,13 +25,12 @@
     .window-deck-box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--wd-color), #000 18%); background: var(--wd-color); box-sizing: border-box; }
     .window-deck-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
     .window-deck-meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
-    .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 280px; }
-    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 145px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
+    .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 120px; }
+    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
     .window-deck-terminal.running { --wd-terminal-color: #3fb950; }
     .window-deck-terminal.waitingInput { --wd-terminal-color: #d29922; }
     .window-deck-terminal.idle { --wd-terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .window-deck-terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--wd-terminal-color); }
-    .window-deck-terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .window-deck-rename { width: 100%; min-height: 24px; box-sizing: border-box; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; padding: 2px 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: inherit; }
     .window-deck-icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .window-deck-icon:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -210,14 +209,10 @@
     if (!items.length) return '<span class="window-deck-terminals"></span>';
     return '<span class="window-deck-terminals">' + items.map((terminal, index) => {
       const status = terminal.state || "idle";
-      const label = terminalLabel(terminal);
-      return `<span class="window-deck-terminal ${esc(status)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)} ${label}`)}">${terminalIcon(status)}<span class="window-deck-terminal-label">${esc(label)}</span></span>`;
+      return `<span class="window-deck-terminal ${esc(status)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)}`)}">${terminalIcon(status)}</span>`;
     }).join("") + '</span>';
   }
 
-  function terminalLabel(terminal) {
-    return terminal.commandLine || terminal.name || terminal.shell || "terminal";
-  }
   function terminalStateLabel(status) {
     if (status === "running") return "运行中";
     if (status === "waitingInput") return "等待输入";
