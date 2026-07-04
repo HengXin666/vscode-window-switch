@@ -1,10 +1,16 @@
 import * as childProcess from "node:child_process";
 import * as vscode from "vscode";
 
-import { RemoteKind, WindowRecord, WorkspaceKind } from "./types";
+import { RemoteKind, WindowRecord, WindowTerminalRecord, WorkspaceKind } from "./types";
 import { desktopEnvironment, linuxSession, now, osKind } from "./util";
 
-export function buildWindowRecord(windowId: string, titleToken: string, staleAfterMs: number, previous?: WindowRecord): WindowRecord {
+export function buildWindowRecord(
+  windowId: string,
+  titleToken: string,
+  staleAfterMs: number,
+  previous?: WindowRecord,
+  terminals: WindowTerminalRecord[] = []
+): WindowRecord {
   const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
   const workspaceFile = vscode.workspace.workspaceFile;
   const workspaceKind: WorkspaceKind = workspaceFile ? "workspace" : workspaceFolders.length > 0 ? "folder" : "empty";
@@ -33,6 +39,7 @@ export function buildWindowRecord(windowId: string, titleToken: string, staleAft
       branch: readGitBranch(primaryFolder?.uri),
       repoRoot: primaryFolder?.uri.toString()
     },
+    terminals,
     state: {
       focused: true,
       active: true,

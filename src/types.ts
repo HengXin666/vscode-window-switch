@@ -3,6 +3,19 @@ export type RemoteKind = "local" | "ssh" | "wsl" | "dev-container" | "codespaces
 export type OperatingSystem = "darwin" | "linux" | "unsupported";
 export type LinuxSession = "x11" | "wayland" | "unknown";
 export type DesktopEnvironment = "gnome" | "kde" | "sway" | "unknown";
+export type TerminalActivityState = "running" | "waitingInput" | "idle";
+
+export type WindowTerminalRecord = {
+  terminalId: string;
+  name: string;
+  order: number;
+  state: TerminalActivityState;
+  commandLine?: string;
+  shell?: string;
+  processId?: number;
+  activeSince?: number;
+  lastOutputAt?: number;
+};
 
 export type WindowRecord = {
   windowId: string;
@@ -28,6 +41,7 @@ export type WindowRecord = {
     repoRoot?: string;
     dirty?: boolean;
   };
+  terminals: WindowTerminalRecord[];
   state: {
     focused: boolean;
     active: boolean;

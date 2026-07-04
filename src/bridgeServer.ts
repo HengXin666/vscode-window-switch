@@ -225,7 +225,8 @@ function toBridgeRecord(record: WindowRecord): Record<string, unknown> {
     workspaceKind: record.workspaceKind,
     workspaceUri: record.workspaceUri,
     remoteKind: record.remote.kind,
-    branch: record.git?.branch
+    branch: record.git?.branch,
+    terminals: record.terminals ?? []
   };
 }
 

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import { Registry } from "./registry";
-import { WindowDeckLayout, WindowRecord } from "./types";
+import { WindowDeckLayout, WindowRecord, WindowTerminalRecord } from "./types";
 import { applyStaleState } from "./windowMetadata";
 import { compactPath, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
@@ -22,6 +22,20 @@ type PanelMessage = {
   alias?: string;
   color?: string;
   layout?: WindowDeckLayout;
+};
+
+type WindowDeckItemViewModel = {
+  windowId: string;
+  title: string;
+  color: string;
+  meta: string;
+  stale: boolean;
+  active: boolean;
+  workspaceKind: WindowRecord["workspaceKind"];
+  workspaceUri: string;
+  remoteKind: WindowRecord["remote"]["kind"];
+  branch: string;
+  terminals: WindowTerminalRecord[];
 };
 
 export class WindowDeckPanel {
@@ -116,7 +130,7 @@ function renderShell(): string {
     .list { max-height: calc(100vh - 90px); overflow: auto; padding: 6px; }
     .section { padding: 8px 6px 4px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; }
     .row, .group-head { display: grid; grid-template-columns: 18px 12px minmax(0,1fr) auto; gap: 7px; align-items: center; min-height: 32px; padding: 4px 7px; margin: 2px 0; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; user-select: none; transition: transform .14s ease, background-color .12s ease, opacity .12s ease, box-shadow .12s ease, outline-color .12s ease; }
-    .row { grid-template-columns: 18px 12px minmax(0,1fr) auto; }
+    .row { grid-template-columns: 18px 12px minmax(0,1fr) minmax(0,auto) auto; }
     .row.child { margin-left: var(--indent); }
     .row:hover, .group-head:hover { background: var(--vscode-list-hoverBackground); }
     .row.current { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
@@ -128,6 +142,13 @@ function renderShell(): string {
     .box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--item-color), #000 18%); background: var(--item-color); box-sizing: border-box; }
     .title, .group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
     .meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
+    .terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 300px; }
+    .terminal { --terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
+    .terminal.running { --terminal-color: #3fb950; }
+    .terminal.waitingInput { --terminal-color: #d29922; }
+    .terminal.idle { --terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
+    .terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--terminal-color); }
+    .terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
     .group { margin: 2px 0 4px; }
@@ -141,6 +162,11 @@ function renderShell(): string {
     .palette { display: grid; grid-template-columns: repeat(8, 18px); gap: 5px; padding: 6px 4px 3px; }
     .swatch { width: 18px !important; min-height: 18px !important; padding: 0 !important; border: 1px solid var(--vscode-contrastBorder) !important; border-radius: 3px !important; background: var(--swatch) !important; }
     .empty { padding: 14px; color: var(--vscode-descriptionForeground); }
+    @media (max-width: 560px) {
+      .row { grid-template-columns: 18px 12px minmax(0,1fr) auto; }
+      .row > .terminals { grid-column: 3 / span 2; grid-row: 2; justify-content: flex-start; max-width: none; }
+      .row > span:last-child { grid-column: 4; grid-row: 1; }
+    }
   </style>
 </head>
 <body>
@@ -216,7 +242,33 @@ function renderShell(): string {
       const classes = ["row", child ? "child" : "", item.windowId === currentWindowId ? "current" : "", item.stale ? "stale" : ""].filter(Boolean).join(" ");
       return '<div draggable="true" class="' + classes + '" data-key="window:' + esc(item.windowId) + '" data-window-id="' + esc(item.windowId) + '" style="--item-color:' + esc(item.color) + '">' +
         '<span></span><span class="box"></span><span class="title" data-window-title="' + esc(item.windowId) + '">' + esc(item.title) + '<span class="meta">' + esc(item.meta) + '</span></span>' +
+        renderTerminals(item.terminals) +
         '<span>' + (item.stale ? '<button class="icon" data-remove="' + esc(item.windowId) + '">×</button>' : "") + '</span></div>';
+    }
+
+    function renderTerminals(terminals) {
+      const items = (terminals || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      if (!items.length) return '<span class="terminals"></span>';
+      return '<span class="terminals">' + items.map((terminal, index) => {
+        const state = terminal.state || "idle";
+        const label = terminalLabel(terminal);
+        return '<span class="terminal ' + esc(state) + '" title="' + esc((index + 1) + ". " + terminalStateLabel(state) + " " + label) + '">' +
+          terminalIcon(state) + '<span class="terminal-label">' + esc(label) + '</span></span>';
+      }).join("") + '</span>';
+    }
+
+    function terminalLabel(terminal) {
+      return terminal.commandLine || terminal.name || terminal.shell || "terminal";
+    }
+    function terminalStateLabel(state) {
+      if (state === "running") return "运行中";
+      if (state === "waitingInput") return "等待输入";
+      return "空闲";
+    }
+    function terminalIcon(state) {
+      if (state === "running") return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5 3.5v9l7-4.5-7-4.5Z"/></svg>';
+      if (state === "waitingInput") return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M3 4.5h10v7H3zM5 7h.01M8 7h.01M11 7h.01M6 9.5h4"/></svg>';
+      return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M2.75 4.25h10.5v7.5H2.75zM5 6.5 7 8l-2 1.5M8.25 9.5h2.5"/></svg>';
     }
 
     function bind(scope) {
@@ -479,7 +531,7 @@ function renderShell(): string {
 </html>`;
 }
 
-function toViewModel(record: WindowRecord): Record<string, string | boolean> {
+function toViewModel(record: WindowRecord): WindowDeckItemViewModel {
   const title = titleFromRecord(record.alias, record.workspaceName);
   const meta = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, record.state.stale ? "历史" : relativeAge(record.state.lastSeenAt)]
     .filter(Boolean)
@@ -494,7 +546,8 @@ function toViewModel(record: WindowRecord): Record<string, string | boolean> {
     workspaceKind: record.workspaceKind,
     workspaceUri: record.workspaceUri ?? "",
     remoteKind: record.remote.kind,
-    branch: record.git?.branch ?? ""
+    branch: record.git?.branch ?? "",
+    terminals: record.terminals ?? []
   };
 }
 

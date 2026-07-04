@@ -3,7 +3,8 @@ import * as vscode from "vscode";
 import { BridgeServer } from "./bridgeServer";
 import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
-import { WindowRecord } from "./types";
+import { WindowRecord, WindowTerminalRecord } from "./types";
+import { TerminalStatusTracker } from "./terminalStatus";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
 import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
@@ -16,6 +17,7 @@ let currentWindowId: string;
 let currentTitleToken: string;
 let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
+let terminalStatusTracker: TerminalStatusTracker | undefined;
 let extensionPath: string;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -25,6 +27,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   currentTitleToken = `WD:${randomId(5)}`;
 
   await ensureTitleToken();
+  terminalStatusTracker = new TerminalStatusTracker();
+  context.subscriptions.push(terminalStatusTracker);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
@@ -153,7 +157,8 @@ async function heartbeat(): Promise<void> {
     }
   }
   const previous = data.windows.find((record) => record.windowId === currentWindowId);
-  const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous);
+  const terminals = await terminalStatusTracker?.snapshot() ?? [];
+  const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous, terminals);
   await registry.upsertWindow(record);
   await refreshStatus(record);
 }
@@ -234,11 +239,13 @@ function toQuickPickItem(record: WindowRecord): WindowQuickPickItem {
   const title = titleFromRecord(record.alias, record.workspaceName);
   const marker = record.windowId === currentWindowId ? "$(check)" : record.state.stale ? "$(history)" : "$(window)";
   const status = record.windowId === currentWindowId ? "当前" : record.state.stale ? "历史关闭" : "已打开";
+  const terminalSummary = terminalQuickPickSummary(record.terminals);
+  const terminalDetail = terminalQuickPickDetail(record.terminals);
   const detailParts = [remoteLabel(record), compactPath(record.workspaceUri), record.git?.branch, `活跃于 ${relativeAge(record.state.lastSeenAt)}`].filter(Boolean);
   return {
     label: `${marker} ${title}`,
-    description: [status, record.color ? `${colorName(record.color)} ${record.color}` : undefined].filter(Boolean).join(" · "),
-    detail: detailParts.join(" · "),
+    description: [status, terminalSummary, record.color ? `${colorName(record.color)} ${record.color}` : undefined].filter(Boolean).join(" · "),
+    detail: [detailParts.join(" · "), terminalDetail].filter(Boolean).join("    "),
     buttons: [
       { iconPath: quickPickButtons.rename, tooltip: "重命名" },
       { iconPath: quickPickButtons.color, tooltip: "设置颜色" },
@@ -459,6 +466,7 @@ async function refreshStatus(record: WindowRecord): Promise<void> {
     `当前：${title}`,
     `Workspace：${compactPath(record.workspaceUri)}`,
     `远程：${remoteLabel(record)}`,
+    terminalQuickPickDetail(record.terminals) ?? "终端：无",
     "点击显示窗口下拉列表"
   ].join("\n");
   statusBarItem.show();
@@ -519,6 +527,50 @@ function remoteLabel(record: WindowRecord): string {
     return `wsl:${authorityName(record.remote.remoteAuthority)}`;
   }
   return record.remote.kind;
+}
+
+function terminalQuickPickSummary(terminals: WindowTerminalRecord[] | undefined): string | undefined {
+  const items = sortedTerminals(terminals);
+  if (items.length === 0) {
+    return undefined;
+  }
+  return items.map((terminal, index) => `${terminalCodicon(terminal.state)} ${index + 1}:${terminalDisplayText(terminal)}`).join("  ");
+}
+
+function terminalQuickPickDetail(terminals: WindowTerminalRecord[] | undefined): string | undefined {
+  const items = sortedTerminals(terminals);
+  if (items.length === 0) {
+    return undefined;
+  }
+  return `终端：${items.map((terminal, index) => `${index + 1}. ${terminalStateLabel(terminal.state)} ${terminalDisplayText(terminal)}`).join("  ")}`;
+}
+
+function sortedTerminals(terminals: WindowTerminalRecord[] | undefined): WindowTerminalRecord[] {
+  return [...(terminals ?? [])].sort((a, b) => a.order - b.order);
+}
+
+function terminalDisplayText(terminal: WindowTerminalRecord): string {
+  return terminal.commandLine || terminal.name || terminal.shell || "terminal";
+}
+
+function terminalStateLabel(state: WindowTerminalRecord["state"]): string {
+  if (state === "running") {
+    return "运行中";
+  }
+  if (state === "waitingInput") {
+    return "等待输入";
+  }
+  return "空闲";
+}
+
+function terminalCodicon(state: WindowTerminalRecord["state"]): string {
+  if (state === "running") {
+    return "$(play)";
+  }
+  if (state === "waitingInput") {
+    return "$(keyboard)";
+  }
+  return "$(terminal)";
 }
 
 function authorityName(authority?: string): string {

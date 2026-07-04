@@ -17,7 +17,7 @@
     .window-deck-popup { position: absolute; top: 34px; right: 10px; width: min(620px, calc(100vw - 20px)); max-height: min(560px, calc(100vh - 60px)); overflow: auto; padding: 6px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 12px 34px rgba(0,0,0,.38); pointer-events: auto; opacity: 0; transform: translateY(-6px) scale(.985); transition: opacity .12s ease, transform .12s ease; }
     .window-deck-overlay.open .window-deck-popup { opacity: 1; transform: translateY(0) scale(1); }
     .window-deck-section { padding: 7px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; }
-    .window-deck-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 32px; padding: 5px 7px; margin: 2px 0; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; user-select: none; transition: transform .14s ease, background-color .12s ease, opacity .12s ease, box-shadow .12s ease, outline-color .12s ease; }
+    .window-deck-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) minmax(0, auto) auto; gap: 8px; align-items: center; min-height: 32px; padding: 5px 7px; margin: 2px 0; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; user-select: none; transition: transform .14s ease, background-color .12s ease, opacity .12s ease, box-shadow .12s ease, outline-color .12s ease; }
     .window-deck-row:hover { background: var(--vscode-list-hoverBackground); }
     .window-deck-row.current { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
     .window-deck-row.stale { opacity: .62; }
@@ -25,6 +25,13 @@
     .window-deck-box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--wd-color), #000 18%); background: var(--wd-color); box-sizing: border-box; }
     .window-deck-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
     .window-deck-meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
+    .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 280px; }
+    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 145px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
+    .window-deck-terminal.running { --wd-terminal-color: #3fb950; }
+    .window-deck-terminal.waitingInput { --wd-terminal-color: #d29922; }
+    .window-deck-terminal.idle { --wd-terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
+    .window-deck-terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--wd-terminal-color); }
+    .window-deck-terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .window-deck-rename { width: 100%; min-height: 24px; box-sizing: border-box; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; padding: 2px 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: inherit; }
     .window-deck-icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .window-deck-icon:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -42,6 +49,11 @@
     .window-deck-palette { display: grid; grid-template-columns: repeat(8, 18px); gap: 5px; padding: 6px 4px 3px; }
     .window-deck-swatch { width: 18px !important; min-height: 18px !important; padding: 0 !important; border: 1px solid var(--vscode-contrastBorder) !important; border-radius: 3px !important; background: var(--wd-color) !important; }
     .window-deck-empty { padding: 12px; color: var(--vscode-descriptionForeground); }
+    @media (max-width: 560px) {
+      .window-deck-row { grid-template-columns: 12px minmax(0, 1fr) auto; }
+      .window-deck-row > .window-deck-terminals { grid-column: 2 / span 2; grid-row: 2; justify-content: flex-start; max-width: none; }
+      .window-deck-row > span:last-child { grid-column: 3; grid-row: 1; }
+    }
   `;
   document.head.appendChild(style);
 
@@ -188,8 +200,33 @@
     const meta = [w.remoteKind, compactUri(w.workspaceUri), w.branch, w.stale ? "历史" : ""].filter(Boolean).join(" · ");
     return `<div draggable="true" class="window-deck-row ${w.windowId === state.currentWindowId ? "current" : ""} ${w.stale ? "stale" : ""}" data-window-id="${esc(w.windowId)}" style="--wd-color:${esc(w.color)}">
       <span class="window-deck-box"></span><span class="window-deck-title" data-window-title="${esc(w.windowId)}">${esc(w.title)}<span class="window-deck-meta">${esc(meta)}</span></span>
+      ${renderTerminals(w.terminals)}
       <span>${w.stale ? `<button class="window-deck-icon" data-remove="${esc(w.windowId)}">×</button>` : ""}</span>
     </div>`;
+  }
+
+  function renderTerminals(terminals) {
+    const items = (terminals || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    if (!items.length) return '<span class="window-deck-terminals"></span>';
+    return '<span class="window-deck-terminals">' + items.map((terminal, index) => {
+      const status = terminal.state || "idle";
+      const label = terminalLabel(terminal);
+      return `<span class="window-deck-terminal ${esc(status)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)} ${label}`)}">${terminalIcon(status)}<span class="window-deck-terminal-label">${esc(label)}</span></span>`;
+    }).join("") + '</span>';
+  }
+
+  function terminalLabel(terminal) {
+    return terminal.commandLine || terminal.name || terminal.shell || "terminal";
+  }
+  function terminalStateLabel(status) {
+    if (status === "running") return "运行中";
+    if (status === "waitingInput") return "等待输入";
+    return "空闲";
+  }
+  function terminalIcon(status) {
+    if (status === "running") return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5 3.5v9l7-4.5-7-4.5Z"/></svg>';
+    if (status === "waitingInput") return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M3 4.5h10v7H3zM5 7h.01M8 7h.01M11 7h.01M6 9.5h4"/></svg>';
+    return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M2.75 4.25h10.5v7.5H2.75zM5 6.5 7 8l-2 1.5M8.25 9.5h2.5"/></svg>';
   }
 
   function bind(scope) {
