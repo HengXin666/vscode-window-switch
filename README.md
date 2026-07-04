@@ -70,4 +70,4 @@ On macOS, Window Deck automatically writes a workspace-level `window.title` mark
 
 On KDE Wayland, Window Deck automatically writes a workspace-level `window.title` marker by default so KWin can match windows reliably. Disable this with `windowDeck.autoApplyTitleMarkerOnKdeWayland`.
 
-After installing or updating Window Deck, each activated VS Code window prompts you to reload that window. Reload all open VS Code windows once so the bridge server, title marker, and window registry all run the same extension version.
+After installing or updating Window Deck, it prompts once per extension version to reload the current VS Code window so the bridge server, title marker, and window registry run the same extension version.

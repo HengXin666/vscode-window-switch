@@ -78,12 +78,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 async function promptReloadAfterInstall(context: vscode.ExtensionContext): Promise<void> {
   const version = extensionVersion(context);
   const promptKey = "windowDeck.reloadPromptVersion";
-  if (context.workspaceState.get<string>(promptKey) === version) {
+  if (context.globalState.get<string>(promptKey) === version) {
     return;
   }
-  await context.workspaceState.update(promptKey, version);
+  await context.globalState.update(promptKey, version);
   const picked = await vscode.window.showInformationMessage(
-    "Window Deck 已安装或更新。请在所有 VS Code 窗口中分别重新加载一次，以启用最新的窗口切换和标题标记。",
+    "Window Deck 已安装或更新。重新加载当前窗口可立即启用最新的窗口切换和标题标记。",
     "重新加载当前窗口",
     "稍后"
   );

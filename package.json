@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
