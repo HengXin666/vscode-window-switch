@@ -11,6 +11,7 @@ const processProbeTimeoutMs = 800;
 const terminalProcessIdTimeoutMs = 250;
 const maxCommandLineLength = 220;
 const maxOutputTailLength = 2000;
+const titleSpinnerPattern = /[\u2801-\u28ff]|[◐◓◑◒◴◷◶◵◜◠◝◞◡◟]/u;
 
 type ProcessRow = {
   pid: number;
@@ -29,6 +30,7 @@ type TrackedTerminal = {
   lastOutputAt?: number;
   outputTail: string;
   processId?: number;
+  titleHasRunningSpinner?: boolean;
   fallbackHasCommand: boolean;
   fallbackCommandLine?: string;
   fallbackLastActivityAt?: number;
@@ -74,6 +76,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
     await this.resolveProcessIds(terminals);
     await this.sampleProcessFallback(terminals);
     const seenAt = Date.now();
+    this.sampleTitleActivity(terminals);
     return terminals.map((terminal, index) => {
       const tracked = this.ensureTerminal(terminal);
       return {
@@ -211,7 +214,17 @@ export class TerminalStatusTracker implements vscode.Disposable {
     }
   }
 
+  private sampleTitleActivity(terminals: readonly vscode.Terminal[]): void {
+    for (const terminal of terminals) {
+      const tracked = this.ensureTerminal(terminal);
+      tracked.titleHasRunningSpinner = looksLikeRunningTitle(terminal.name);
+    }
+  }
+
   private stateFor(tracked: TrackedTerminal, seenAt: number): TerminalActivityState {
+    if (tracked.titleHasRunningSpinner) {
+      return "running";
+    }
     const hasActiveCommand = Boolean(tracked.activeExecution) || tracked.fallbackHasCommand;
     if (!hasActiveCommand) {
       return "idle";
@@ -312,6 +325,10 @@ function representativeCommand(rootPid: number | undefined, rows: ProcessRow[]):
 function looksLikeShell(command: string): boolean {
   const executable = path.basename(command.split(/\s+/, 1)[0] ?? "");
   return /^(ba|z|fi|c|k)?sh$|^pwsh$|^powershell$|^cmd(\.exe)?$/i.test(executable);
+}
+
+function looksLikeRunningTitle(title: string): boolean {
+  return titleSpinnerPattern.test(title);
 }
 
 function cleanCommandLine(commandLine: string | undefined): string | undefined {
