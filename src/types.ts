@@ -85,11 +85,6 @@ export type RegistryData = {
   layout: WindowDeckLayout;
 };
 
-export type RegistryControl = {
-  reloadRequestedAt?: number;
-  reloadReason?: string;
-};
-
 export type FocusResult =
   | { ok: true }
   | { ok: false; reason: string };

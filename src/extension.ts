@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 
+import { GitHubVsixUpdateManager } from "./vendor/githubUpdater";
 import { BridgeServer } from "./bridgeServer";
 import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord, WindowTerminalRecord } from "./types";
 import { TerminalStatusTracker } from "./terminalStatus";
-import { checkForUpdates } from "./updateService";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
 import { compactPath, getConfigBoolean, getConfigNumber, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
@@ -19,9 +19,8 @@ let currentTitleToken: string;
 let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let terminalStatusTracker: TerminalStatusTracker | undefined;
+let updateManager: GitHubVsixUpdateManager;
 let extensionPath: string;
-const extensionActivatedAt = Date.now();
-let reloadScheduled = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionPath = context.extensionPath;
@@ -55,6 +54,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   await bridgeServer.start(context);
   context.subscriptions.push(bridgeServer);
+  updateManager = new GitHubVsixUpdateManager(context, {
+    owner: "HengXin666",
+    repo: "vscode-window-switch",
+    displayName: "Window Deck",
+    stateKeyPrefix: "windowDeck.updater"
+  });
+  context.subscriptions.push(updateManager);
+
+  const syncAutomaticChecks = (): void => {
+    updateManager.setAutomaticChecksEnabled(bridgeServer?.isPrimary === true && getConfigBoolean("autoCheckUpdates"));
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand("windowDeck.installWorkbenchPatch", installWorkbenchPatch),
@@ -66,14 +76,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("windowDeck.configureCurrentWindow", configureCurrentWindow),
     vscode.commands.registerCommand("windowDeck.cleanupStaleWindows", cleanupStaleWindows),
     vscode.commands.registerCommand("windowDeck.diagnoseFocusSupport", diagnoseFocusSupport),
-    vscode.commands.registerCommand("windowDeck.checkForUpdates", () => checkForUpdates(context, { manual: true, onInstalled: () => requestReloadAllWindows("安装更新") })),
-    vscode.commands.registerCommand("windowDeck.reloadAllWindows", () => requestReloadAllWindows("用户请求"))
+    vscode.commands.registerCommand("windowDeck.checkForUpdates", () => updateManager.checkForUpdates({ manual: true })),
+    vscode.commands.registerCommand("windowDeck.reloadAllWindows", () => updateManager.requestReloadAllWindows()),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("windowDeck.autoCheckUpdates")) {
+        syncAutomaticChecks();
+      }
+    })
   );
 
   await heartbeat();
-  if (bridgeServer.isPrimary && getConfigBoolean("autoCheckUpdates")) {
-    void checkForUpdates(context, { onInstalled: () => requestReloadAllWindows("安装更新") });
-  }
+  syncAutomaticChecks();
   const interval = Math.max(1000, getConfigNumber("heartbeatIntervalMs") || 5000);
   heartbeatTimer = setInterval(() => {
     void heartbeat();
@@ -135,21 +148,6 @@ async function resolveCurrentWindowId(): Promise<string> {
   return previous?.windowId ?? `workspace-${randomId(8)}`;
 }
 
-async function requestReloadAllWindows(reason: string): Promise<void> {
-  const control = await registry.requestReloadAll(reason);
-  scheduleReloadIfRequested(control.reloadRequestedAt);
-}
-
-function scheduleReloadIfRequested(requestedAt?: number): void {
-  if (reloadScheduled || !requestedAt || requestedAt <= extensionActivatedAt) {
-    return;
-  }
-  reloadScheduled = true;
-  setTimeout(() => {
-    void vscode.commands.executeCommand("workbench.action.reloadWindow");
-  }, 350);
-}
-
 async function migrateLegacyWorkspaceTitle(): Promise<void> {
   try {
     const configuration = vscode.workspace.getConfiguration("window");
@@ -195,8 +193,6 @@ async function heartbeat(): Promise<void> {
   const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous, terminals);
   await registry.upsertWindow(record);
   await refreshStatus(record);
-  const control = await registry.readControl();
-  scheduleReloadIfRequested(control.reloadRequestedAt);
 }
 
 async function showWindows(): Promise<void> {

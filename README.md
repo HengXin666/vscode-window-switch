@@ -36,6 +36,10 @@ npm run compile
 
 Open this folder in VS Code and press `F5` to launch an Extension Development Host.
 
+## Reusable updater
+
+The sibling project `../vscode-extension-github-updater/` is a standalone, reusable module for other VS Code extensions. It provides GitHub Release checks, VSIX download/installation, and the post-update “reload all windows” workflow. Its compiled runtime is copied into `dist/vendor` by the build process.
+
 ## 顶部栏补丁
 
 VS Code 稳定扩展 API 不能在原生文件标签栏或标题栏中插入自绘组件。Window Deck 提供一个本机优先的非官方补丁，把脚本注入到 VS Code workbench。
