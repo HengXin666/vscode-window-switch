@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -31,12 +31,13 @@
     "onCommand:windowDeck.renameCurrentWindow",
     "onCommand:windowDeck.setCurrentWindowColor",
     "onCommand:windowDeck.cleanupStaleWindows",
-    "onCommand:windowDeck.diagnoseFocusSupport"
+    "onCommand:windowDeck.diagnoseFocusSupport",
+    "onCommand:windowDeck.checkForUpdates",
+    "onCommand:windowDeck.reloadAllWindows"
   ],
   "main": "./dist/extension.js",
   "extensionKind": [
-    "ui",
-    "workspace"
+    "ui"
   ],
   "contributes": {
     "commands": [
@@ -78,11 +79,6 @@
         "category": "Window Deck"
       },
       {
-        "command": "windowDeck.applyCurrentWindowTitle",
-        "title": "Window Deck: 应用窗口标题标记",
-        "category": "Window Deck"
-      },
-      {
         "command": "windowDeck.cleanupStaleWindows",
         "title": "Window Deck: 清理失联窗口",
         "category": "Window Deck"
@@ -90,6 +86,16 @@
       {
         "command": "windowDeck.diagnoseFocusSupport",
         "title": "Window Deck: 诊断聚焦支持",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.checkForUpdates",
+        "title": "Window Deck: 检查更新",
+        "category": "Window Deck"
+      },
+      {
+        "command": "windowDeck.reloadAllWindows",
+        "title": "Window Deck: 重载所有窗口",
         "category": "Window Deck"
       }
     ],
@@ -114,28 +120,10 @@
           "minimum": 60000,
           "description": "清理命令会删除超过这个时间的失联窗口。"
         },
-        "windowDeck.titleTokenMode": {
-          "type": "string",
-          "enum": [
-            "disabled"
-          ],
-          "default": "disabled",
-          "description": "预留给未来的单窗口标题标记支持。当前禁用，因为 VS Code 公开的是共享 window.title 配置。"
-        },
-        "windowDeck.applyWorkbenchColors": {
-          "type": "boolean",
-          "default": false,
-          "description": "启用后，设置窗口颜色时也会写入当前 workspace 的 workbench.colorCustomizations。"
-        },
-        "windowDeck.autoApplyTitleMarkerOnKdeWayland": {
+        "windowDeck.autoCheckUpdates": {
           "type": "boolean",
           "default": true,
-          "description": "在 KDE Wayland 下自动写入当前 workspace 的 window.title 标记，让 KWin 更可靠地聚焦窗口。"
-        },
-        "windowDeck.autoApplyTitleMarkerOnMacOS": {
-          "type": "boolean",
-          "default": true,
-          "description": "在 macOS 下自动写入当前 workspace 的 window.title 标记，让 AppleScript 能可靠匹配并切换 VS Code 窗口。"
+          "description": "每 24 小时自动检查一次 GitHub Release，有新版本时提示下载并安装。"
         }
       }
     },
@@ -169,13 +157,16 @@
           "command": "windowDeck.configureCurrentWindow"
         },
         {
-          "command": "windowDeck.applyCurrentWindowTitle"
-        },
-        {
           "command": "windowDeck.cleanupStaleWindows"
         },
         {
           "command": "windowDeck.diagnoseFocusSupport"
+        },
+        {
+          "command": "windowDeck.checkForUpdates"
+        },
+        {
+          "command": "windowDeck.reloadAllWindows"
         }
       ]
     }

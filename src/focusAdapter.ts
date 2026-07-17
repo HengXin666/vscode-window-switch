@@ -8,6 +8,11 @@ import { FocusResult, WindowRecord } from "./types";
 import { desktopEnvironment, linuxSession } from "./util";
 
 export async function focusWindow(record: WindowRecord): Promise<FocusResult> {
+  const vscodeResult = await focusWorkspaceWindow(record);
+  if (vscodeResult) {
+    return vscodeResult;
+  }
+
   const titleCandidates = candidateTitles(record);
   if (titleCandidates.length === 0) {
     return { ok: false, reason: "目标窗口缺少可用于匹配 OS 窗口标题的信息。" };
@@ -29,22 +34,49 @@ export async function focusWindow(record: WindowRecord): Promise<FocusResult> {
 
 export function focusSupportMessage(): string {
   if (process.platform === "darwin") {
-    return "macOS: 使用 AppleScript fallback 按标题 token 聚焦。若失败，请检查系统辅助功能权限。";
+    return "macOS: 优先通过 VS Code 自身的 workspace 窗口路由切换，不需要系统权限；仅无 workspace 的空窗口使用 AppleScript fallback。";
   }
   if (process.platform === "linux") {
     const session = linuxSession();
     if (session === "x11") {
-      return "Linux X11: 支持通过 wmctrl 或 xdotool 按标题 token 聚焦。请确认至少安装其中一个工具。";
+      return "Linux X11: 优先通过 VS Code workspace 窗口路由切换；空窗口使用 wmctrl 或 xdotool fallback。";
     }
     if (session === "wayland") {
       if (desktopEnvironment() === "kde") {
-        return "Linux Wayland KDE: 通过 KWin D-Bus 脚本接口 best-effort 聚焦。需要 qdbus6 或 qdbus 可用。";
+        return "Linux Wayland KDE: 优先通过 VS Code workspace 窗口路由切换；空窗口使用 KWin D-Bus fallback。";
       }
-      return "Linux Wayland: 支持窗口索引、命名和颜色；自动聚焦受桌面安全模型限制，仅 best-effort。";
+      return "Linux Wayland: 有 workspace 的窗口可通过 VS Code 自身路由切换；空窗口聚焦受桌面安全模型限制。";
     }
     return "Linux: 无法判断当前是 X11 还是 Wayland，自动聚焦能力未知。";
   }
-  return `当前平台 ${process.platform} 暂不支持自动聚焦。`;
+  return `当前平台 ${process.platform}: 有 workspace 的窗口可通过 VS Code 自身路由切换；空窗口暂不支持自动聚焦。`;
+}
+
+/**
+ * Ask VS Code's main process to open the target workspace in a new window.
+ * VS Code de-duplicates already-open workspaces and focuses their existing
+ * window, so this works across desktop platforms without OS automation.
+ * Returning undefined means that the record cannot be addressed by a
+ * workspace URI and the platform-specific fallback should be attempted.
+ */
+async function focusWorkspaceWindow(record: WindowRecord): Promise<FocusResult | undefined> {
+  if (!record.workspaceUri || record.workspaceKind === "empty") {
+    return undefined;
+  }
+
+  try {
+    await vscode.commands.executeCommand(
+      "vscode.openFolder",
+      vscode.Uri.parse(record.workspaceUri),
+      { forceNewWindow: true }
+    );
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `VS Code 无法切换到目标 workspace：${(error as Error).message}`
+    };
+  }
 }
 
 function focusMac(titleCandidates: string[]): Promise<FocusResult> {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { RegistryData, UserWindowConfig, WindowDeckLayout, WindowRecord } from "./types";
+import { RegistryControl, RegistryData, UserWindowConfig, WindowDeckLayout, WindowRecord } from "./types";
 
 const emptyRegistry = (): RegistryData => ({
   version: 1,
@@ -15,9 +15,11 @@ const emptyRegistry = (): RegistryData => ({
 
 export class Registry {
   private readonly filePath: string;
+  private readonly controlFilePath: string;
 
   public constructor(directory: string) {
     this.filePath = path.join(directory, "registry.json");
+    this.controlFilePath = path.join(directory, "control.json");
   }
 
   public async read(): Promise<RegistryData> {
@@ -111,6 +113,29 @@ export class Registry {
     await this.update((data) => {
       data.layout = normalizeLayout(layout, data.windows.map((item) => item.windowId));
     });
+  }
+
+  public async readControl(): Promise<RegistryControl> {
+    try {
+      return JSON.parse(await fs.readFile(this.controlFilePath, "utf8")) as RegistryControl;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return {};
+      }
+      throw error;
+    }
+  }
+
+  public async requestReloadAll(reason: string): Promise<RegistryControl> {
+    await fs.mkdir(path.dirname(this.controlFilePath), { recursive: true });
+    const control: RegistryControl = {
+      reloadRequestedAt: Date.now(),
+      reloadReason: reason
+    };
+    const tempPath = `${this.controlFilePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, `${JSON.stringify(control, null, 2)}\n`, "utf8");
+    await fs.rename(tempPath, this.controlFilePath);
+    return control;
   }
 
   private async write(data: RegistryData): Promise<void> {

@@ -5,8 +5,9 @@ import { focusSupportMessage, focusWindow } from "./focusAdapter";
 import { Registry } from "./registry";
 import { WindowRecord, WindowTerminalRecord } from "./types";
 import { TerminalStatusTracker } from "./terminalStatus";
+import { checkForUpdates } from "./updateService";
 import { applyStaleState, buildWindowRecord } from "./windowMetadata";
-import { compactPath, desktopEnvironment, getConfigBoolean, getConfigNumber, getConfigString, linuxSession, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
+import { compactPath, getConfigBoolean, getConfigNumber, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 import { WindowDeckPanel } from "./windowDeckPanel";
 
@@ -19,14 +20,16 @@ let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let terminalStatusTracker: TerminalStatusTracker | undefined;
 let extensionPath: string;
+const extensionActivatedAt = Date.now();
+let reloadScheduled = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionPath = context.extensionPath;
   registry = new Registry(registryDirectory(context));
-  currentWindowId = `${process.pid}-${randomId(8)}`;
+  currentWindowId = await resolveCurrentWindowId();
   currentTitleToken = `WD:${randomId(5)}`;
 
-  await ensureTitleToken();
+  await migrateLegacyWorkspaceTitle();
   terminalStatusTracker = new TerminalStatusTracker();
   context.subscriptions.push(terminalStatusTracker);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -61,44 +64,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("windowDeck.renameCurrentWindow", renameCurrentWindow),
     vscode.commands.registerCommand("windowDeck.setCurrentWindowColor", setCurrentWindowColor),
     vscode.commands.registerCommand("windowDeck.configureCurrentWindow", configureCurrentWindow),
-    vscode.commands.registerCommand("windowDeck.applyCurrentWindowTitle", applyCurrentWindowTitle),
     vscode.commands.registerCommand("windowDeck.cleanupStaleWindows", cleanupStaleWindows),
     vscode.commands.registerCommand("windowDeck.diagnoseFocusSupport", diagnoseFocusSupport),
-    vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (event.affectsConfiguration("windowDeck.titleTokenMode")) {
-        await ensureTitleToken();
-      }
-    })
+    vscode.commands.registerCommand("windowDeck.checkForUpdates", () => checkForUpdates(context, { manual: true, onInstalled: () => requestReloadAllWindows("安装更新") })),
+    vscode.commands.registerCommand("windowDeck.reloadAllWindows", () => requestReloadAllWindows("用户请求"))
   );
 
   await heartbeat();
-  void promptReloadAfterInstall(context);
+  if (bridgeServer.isPrimary && getConfigBoolean("autoCheckUpdates")) {
+    void checkForUpdates(context, { onInstalled: () => requestReloadAllWindows("安装更新") });
+  }
   const interval = Math.max(1000, getConfigNumber("heartbeatIntervalMs") || 5000);
   heartbeatTimer = setInterval(() => {
     void heartbeat();
   }, interval);
-}
-
-async function promptReloadAfterInstall(context: vscode.ExtensionContext): Promise<void> {
-  const version = extensionVersion(context);
-  const promptKey = "windowDeck.reloadPromptVersion";
-  if (context.globalState.get<string>(promptKey) === version) {
-    return;
-  }
-  await context.globalState.update(promptKey, version);
-  const picked = await vscode.window.showInformationMessage(
-    "Window Deck 已安装或更新。重新加载当前窗口可立即启用最新的窗口切换和标题标记。",
-    "重新加载当前窗口",
-    "稍后"
-  );
-  if (picked === "重新加载当前窗口") {
-    await vscode.commands.executeCommand("workbench.action.reloadWindow");
-  }
-}
-
-function extensionVersion(context: vscode.ExtensionContext): string {
-  const packageJson = context.extension.packageJSON as { version?: unknown };
-  return typeof packageJson.version === "string" ? packageJson.version : "unknown";
 }
 
 async function installWorkbenchPatch(): Promise<void> {
@@ -144,6 +123,61 @@ export async function deactivate(): Promise<void> {
   }
 }
 
+async function resolveCurrentWindowId(): Promise<string> {
+  const workspaceUri = vscode.workspace.workspaceFile?.toString() ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+  if (!workspaceUri) {
+    return `empty-${process.pid}-${randomId(8)}`;
+  }
+  const data = await registry.read();
+  const previous = data.windows
+    .filter((record) => record.workspaceUri === workspaceUri)
+    .sort((left, right) => right.state.lastSeenAt - left.state.lastSeenAt)[0];
+  return previous?.windowId ?? `workspace-${randomId(8)}`;
+}
+
+async function requestReloadAllWindows(reason: string): Promise<void> {
+  const control = await registry.requestReloadAll(reason);
+  scheduleReloadIfRequested(control.reloadRequestedAt);
+}
+
+function scheduleReloadIfRequested(requestedAt?: number): void {
+  if (reloadScheduled || !requestedAt || requestedAt <= extensionActivatedAt) {
+    return;
+  }
+  reloadScheduled = true;
+  setTimeout(() => {
+    void vscode.commands.executeCommand("workbench.action.reloadWindow");
+  }, 350);
+}
+
+async function migrateLegacyWorkspaceTitle(): Promise<void> {
+  try {
+    const configuration = vscode.workspace.getConfiguration("window");
+    const workspaceTitle = configuration.inspect<string>("title")?.workspaceValue;
+    if (typeof workspaceTitle !== "string" || !/\[WD:[a-f0-9]+\]\s*$/i.test(workspaceTitle)) {
+      return;
+    }
+
+    await configuration.update("title", undefined, vscode.ConfigurationTarget.Workspace);
+    if (vscode.workspace.workspaceFile || !vscode.workspace.workspaceFolders?.length) {
+      return;
+    }
+
+    const settingsDirectory = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, ".vscode");
+    const settingsFile = vscode.Uri.joinPath(settingsDirectory, "settings.json");
+    const contents = new TextDecoder().decode(await vscode.workspace.fs.readFile(settingsFile));
+    if (!/^\s*\{\s*\}\s*$/.test(contents)) {
+      return;
+    }
+    await vscode.workspace.fs.delete(settingsFile);
+    if ((await vscode.workspace.fs.readDirectory(settingsDirectory)).length === 0) {
+      await vscode.workspace.fs.delete(settingsDirectory);
+    }
+  } catch (error) {
+    console.warn("Window Deck could not migrate legacy workspace settings", error);
+  }
+}
+
 async function openPanel(): Promise<void> {
   await deckPanel?.show();
 }
@@ -161,6 +195,8 @@ async function heartbeat(): Promise<void> {
   const record = buildWindowRecord(currentWindowId, currentTitleToken, staleAfterMs, previous, terminals);
   await registry.upsertWindow(record);
   await refreshStatus(record);
+  const control = await registry.readControl();
+  scheduleReloadIfRequested(control.reloadRequestedAt);
 }
 
 async function showWindows(): Promise<void> {
@@ -336,7 +372,6 @@ async function openWindow(windowId: string): Promise<void> {
 async function renameWindow(windowId: string, alias: string): Promise<void> {
   await registry.saveUserConfig({ windowId, alias: alias.trim() || undefined });
   if (windowId === currentWindowId) {
-    await applyCurrentWindowTitle({ silent: true });
     await heartbeat();
   }
   await deckPanel?.refresh();
@@ -350,9 +385,6 @@ async function removeWindow(windowId: string): Promise<void> {
 async function setWindowColor(windowId: string, color: string): Promise<void> {
   await registry.saveUserConfig({ windowId, color });
   if (windowId === currentWindowId) {
-    if (getConfigBoolean("applyWorkbenchColors")) {
-      await applyWorkbenchColor(color);
-    }
     await heartbeat();
   }
   await deckPanel?.refresh();
@@ -375,8 +407,6 @@ async function configureCurrentWindow(): Promise<void> {
     [
       { label: "$(edit) 重命名", description: titleFromRecord(current?.alias, current?.workspaceName), action: "rename" },
       { label: "$(symbol-color) 设置颜色", description: current?.color ?? "未设置颜色", action: "color" },
-      { label: "$(window) 应用窗口标题标记", description: `[${currentTitleToken}]`, action: "title" },
-      { label: "$(symbol-color) 应用颜色到 VS Code 外观", description: "写入当前 workspace 的 workbench.colorCustomizations", action: "workbenchColor" },
       { label: "$(copy) 复制窗口信息", description: current?.workspaceName ?? "当前窗口", action: "copy" }
     ],
     { title: "Window Deck：配置当前窗口" }
@@ -388,37 +418,9 @@ async function configureCurrentWindow(): Promise<void> {
     await renameCurrentWindow();
   } else if (picked.action === "color") {
     await setCurrentWindowColor();
-  } else if (picked.action === "title") {
-    await applyCurrentWindowTitle();
-  } else if (picked.action === "workbenchColor") {
-    if (!current?.color) {
-      await vscode.window.showWarningMessage("请先设置 Window Deck 窗口颜色。");
-      return;
-    }
-    await applyWorkbenchColor(current.color);
-    await vscode.window.showInformationMessage("Window Deck 已为当前 workspace 写入 VS Code 外观颜色。");
   } else if (picked.action === "copy") {
     await vscode.env.clipboard.writeText(JSON.stringify(current, null, 2));
     await vscode.window.showInformationMessage("Window Deck 已复制当前窗口信息。");
-  }
-}
-
-async function applyCurrentWindowTitle(options: { silent?: boolean } = {}): Promise<void> {
-  const hasWorkspace = Boolean(vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length);
-  if (!hasWorkspace) {
-    if (!options.silent) {
-      await vscode.window.showWarningMessage("只有打开文件夹或 workspace 后，Window Deck 才能写入当前窗口的标题标记。");
-    }
-    return;
-  }
-  const data = await registry.read();
-  const current = data.windows.find((record) => record.windowId === currentWindowId);
-  const aliasOrRoot = current?.alias?.trim() || "${rootName}";
-  const title = `${aliasOrRoot}${"${separator}${activeEditorShort}"} [${currentTitleToken}]`;
-  await vscode.workspace.getConfiguration("window").update("title", title, vscode.ConfigurationTarget.Workspace);
-  if (!options.silent) {
-    await heartbeat();
-    await vscode.window.showInformationMessage(`Window Deck 已应用 workspace 标题标记 [${currentTitleToken}]。`);
   }
 }
 
@@ -435,24 +437,9 @@ async function diagnoseFocusSupport(): Promise<void> {
     `平台：${process.platform}`,
     `会话：${current?.platform.linuxSession ?? "n/a"}`,
     `桌面：${current?.platform.desktop ?? "n/a"}`,
-    `标题标记：${currentTitleToken}`
+    `本地窗口 ID：${currentWindowId}`
   ].join("\n");
   await vscode.window.showInformationMessage(details, { modal: true });
-}
-
-async function ensureTitleToken(): Promise<void> {
-  const shouldAutoApplyOnMacOS = process.platform === "darwin" && getConfigBoolean("autoApplyTitleMarkerOnMacOS");
-  const shouldAutoApplyOnKdeWayland = process.platform === "linux" && linuxSession() === "wayland" && desktopEnvironment() === "kde" && getConfigBoolean("autoApplyTitleMarkerOnKdeWayland");
-  if (shouldAutoApplyOnMacOS || shouldAutoApplyOnKdeWayland) {
-    await applyCurrentWindowTitle({ silent: true });
-    return;
-  }
-  if (getConfigString("titleTokenMode") !== "visible") {
-    return;
-  }
-  await vscode.window.showWarningMessage(
-    "Window Deck 不能安全地通过 VS Code 全局 window.title 注入唯一标题标记。本版本不会自动修改全局标题设置。"
-  );
 }
 
 async function refreshStatus(record: WindowRecord): Promise<void> {
@@ -483,20 +470,6 @@ async function markFocused(windowId: string): Promise<void> {
       }
     }));
   });
-}
-
-async function applyWorkbenchColor(color: string): Promise<void> {
-  const config = vscode.workspace.getConfiguration("workbench");
-  const current = config.get<Record<string, string>>("colorCustomizations") ?? {};
-  await config.update(
-    "colorCustomizations",
-    {
-      ...current,
-      "titleBar.activeBackground": color,
-      "statusBar.background": color
-    },
-    vscode.ConfigurationTarget.Workspace
-  );
 }
 
 function colorName(color: string): string {

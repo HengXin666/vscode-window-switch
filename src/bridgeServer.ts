@@ -23,6 +23,10 @@ export class BridgeServer implements vscode.Disposable {
   private overlayAckSeq = 0;
   private server?: http.Server;
 
+  public get isPrimary(): boolean {
+    return this.server !== undefined;
+  }
+
   public constructor(
     private readonly registry: Registry,
     private readonly currentWindowId: () => string,
