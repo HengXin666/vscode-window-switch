@@ -14,26 +14,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout extension
         uses: actions/checkout@v4
+        with:
+          path: project
+
+      - name: Checkout shared updater
+        uses: actions/checkout@v4
+        with:
+          repository: HengXin666/vscode-extension-github-updater
+          path: vscode-extension-github-updater
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: |
+            project/package-lock.json
+            vscode-extension-github-updater/package-lock.json
+
+      - name: Build shared updater
+        working-directory: vscode-extension-github-updater
+        run: npm ci && npm run check
 
       - name: Install dependencies
+        working-directory: project
         run: npm ci
 
       - name: Compile
+        working-directory: project
         run: npm run compile
 
       - name: Package extension
+        working-directory: project
         run: npx vsce package --no-dependencies
 
       - name: Read package version
         id: package
+        working-directory: project
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           NAME="$(node -p "require('./package.json').name")"
@@ -42,6 +61,7 @@ jobs:
           echo "vsix=$NAME-$VERSION.vsix" >> "$GITHUB_OUTPUT"
 
       - name: Create or update tag
+        working-directory: project
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -53,6 +73,6 @@ jobs:
         with:
           tag_name: ${{ steps.package.outputs.tag }}
           name: Window Deck ${{ steps.package.outputs.version }}
-          files: ${{ steps.package.outputs.vsix }}
+          files: project/${{ steps.package.outputs.vsix }}
           generate_release_notes: true
           make_latest: true
