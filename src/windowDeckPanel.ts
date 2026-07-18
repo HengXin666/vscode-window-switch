@@ -50,7 +50,6 @@ type WindowDeckItemViewModel = {
 export class WindowDeckPanel {
   private panel?: vscode.WebviewPanel;
   private refreshTimer?: NodeJS.Timeout;
-  private readonly replaySent = new Set<string>();
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -74,7 +73,7 @@ export class WindowDeckPanel {
       enableScripts: true,
       retainContextWhenHidden: true
     });
-    this.panel.webview.html = renderShell(this.panel.webview, this.extensionUri);
+    this.panel.webview.html = renderShell(this.panel.webview, this.extensionUri, readTerminalStyle());
     this.panel.webview.onDidReceiveMessage((message: PanelMessage) => {
       void this.handleMessage(message);
     });
@@ -84,7 +83,6 @@ export class WindowDeckPanel {
         this.refreshTimer = undefined;
       }
       this.panel = undefined;
-      this.replaySent.clear();
     });
     this.refreshTimer = setInterval(() => {
       void this.refresh();
@@ -106,16 +104,6 @@ export class WindowDeckPanel {
       ...layout,
       order: ordered.map((record) => record.windowId)
     };
-    for (const record of ordered) {
-      for (const terminal of record.terminals ?? []) {
-        const replayKey = `${record.windowId}:${terminal.terminalId}`;
-        const replay = this.actions.getTerminalReplay(record.windowId, terminal.terminalId);
-        if (replay && !this.replaySent.has(replayKey)) {
-          this.replaySent.add(replayKey);
-          await this.panel.webview.postMessage({ type: "terminalReplay", windowId: record.windowId, terminalId: terminal.terminalId, data: replay });
-        }
-      }
-    }
     await this.panel.webview.postMessage({
       type: "windows",
       windows: ordered.map(toViewModel),
@@ -152,7 +140,16 @@ export class WindowDeckPanel {
   }
 }
 
-function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): string {
+function readTerminalStyle(): { fontFamily: string; fontSize: number; fontWeight: string } {
+  const config = vscode.workspace.getConfiguration("terminal.integrated");
+  return {
+    fontFamily: config.get<string>("fontFamily") || "",
+    fontSize: config.get<number>("fontSize") || 13,
+    fontWeight: String(config.get<string | number>("fontWeight") || "normal")
+  };
+}
+
+function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefined, terminalStyle: { fontFamily: string; fontSize: number; fontWeight: string }): string {
   const nonce = randomId(24);
   const xtermScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "xterm.mjs")).toString() : "";
   const fitScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "addon-fit.mjs")).toString() : "";
@@ -216,6 +213,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     #deck:not(.list) { min-height: 0; overflow: hidden; }
     .merged { --merged-left-width: 240px; --merged-right-width: 280px; display: grid; grid-template-columns: minmax(140px, var(--merged-left-width)) 5px minmax(0, 1fr) 5px minmax(160px, var(--merged-right-width)); width: 100%; max-width: 100%; height: 100%; min-height: 0; overflow: hidden; }
     .merged-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--vscode-sideBar-background); }
+    .merged-column:last-child { box-sizing: border-box; padding-right: 8px; }
     .merged-resizer { position: relative; z-index: 2; width: 5px; min-width: 5px; cursor: col-resize; touch-action: none; background: var(--vscode-widget-border); }
     .merged-resizer::after { content: ""; position: absolute; inset: 0 -2px; background: transparent; }
     .merged-resizer:hover, .merged-resizer.dragging, .merged-resizer:focus-visible { background: var(--vscode-focusBorder); outline: 0; }
@@ -238,6 +236,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     .terminal-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm { height: 100%; padding: 0 4px; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm-screen, .terminal-viewport .xterm-viewport { background: var(--vscode-terminal-background, var(--vscode-editor-background)) !important; }
+    .terminal-viewport textarea.xterm-helper-textarea { opacity: 0 !important; left: -10000px !important; top: 0 !important; width: 1px !important; height: 1px !important; resize: none !important; }
     .terminal-output { flex: 1; min-height: 0; margin: 0; overflow: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
     .terminal-output-placeholder { color: var(--vscode-descriptionForeground); }
     .terminal-command { padding-bottom: 8px; color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
@@ -275,6 +274,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     const terminalViews = new Map();
     const terminalPending = new Map();
     const terminalReplayPending = new Set();
+    const terminalOptions = ${JSON.stringify(terminalStyle)};
     Promise.all([import("${xtermScript}"), import("${fitScript}")]).then(([xtermModule, fitModule]) => {
       Terminal = xtermModule.Terminal;
       FitAddon = fitModule.FitAddon;
@@ -297,8 +297,10 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     let selectedMergedWindowId = "";
     let selectedMergedTerminalId = "";
     const persistedWebviewState = vscode.getState() || {};
-    let mergedLeftWidth = Number(persistedWebviewState.mergedLeftWidth) || 240;
-    let mergedRightWidth = Number(persistedWebviewState.mergedRightWidth) || 280;
+    let storedWidths = {};
+    try { storedWidths = JSON.parse(localStorage.getItem("windowDeck.mergedWidths") || "{}"); } catch {}
+    let mergedLeftWidth = Number(persistedWebviewState.mergedLeftWidth || storedWidths.mergedLeftWidth) || 240;
+    let mergedRightWidth = Number(persistedWebviewState.mergedRightWidth || storedWidths.mergedRightWidth) || 280;
     document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
       activeTab = tab.dataset.tab;
       document.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item === tab));
@@ -372,9 +374,9 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       let view = terminalViews.get(key);
       if (!view) {
         const terminalStyle = getComputedStyle(document.body);
-        const terminalFontFamily = terminalStyle.getPropertyValue("--vscode-terminal-font-family").trim() || terminalStyle.getPropertyValue("--vscode-editor-font-family").trim() || "monospace";
-        const terminalFontSize = Number.parseFloat(terminalStyle.getPropertyValue("--vscode-terminal-font-size")) || Number.parseFloat(terminalStyle.getPropertyValue("--vscode-editor-font-size")) || 13;
-        const terminalFontWeight = terminalStyle.getPropertyValue("--vscode-terminal-font-weight").trim() || "normal";
+        const terminalFontFamily = terminalOptions.fontFamily || terminalStyle.getPropertyValue("--vscode-terminal-font-family").trim() || terminalStyle.getPropertyValue("--vscode-editor-font-family").trim() || "monospace";
+        const terminalFontSize = terminalOptions.fontSize || Number.parseFloat(terminalStyle.getPropertyValue("--vscode-terminal-font-size")) || Number.parseFloat(terminalStyle.getPropertyValue("--vscode-editor-font-size")) || 13;
+        const terminalFontWeight = terminalOptions.fontWeight || terminalStyle.getPropertyValue("--vscode-terminal-font-weight").trim() || "normal";
         const term = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 10000, copyOnSelection: false, allowProposedApi: true, fontFamily: terminalFontFamily, fontSize: terminalFontSize, fontWeight: terminalFontWeight, theme: { background: "#00000000" } });
         const fit = new FitAddon();
         term.loadAddon(fit);
@@ -678,7 +680,9 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     }
 
     function persistMergedWidths() {
-      vscode.setState({ ...(vscode.getState() || {}), mergedLeftWidth: Math.round(mergedLeftWidth), mergedRightWidth: Math.round(mergedRightWidth) });
+      const state = { ...(vscode.getState() || {}), mergedLeftWidth: Math.round(mergedLeftWidth), mergedRightWidth: Math.round(mergedRightWidth) };
+      vscode.setState(state);
+      try { localStorage.setItem("windowDeck.mergedWidths", JSON.stringify({ mergedLeftWidth: state.mergedLeftWidth, mergedRightWidth: state.mergedRightWidth })); } catch {}
     }
 
     function showWindowMenu(windowId, x, y) {
