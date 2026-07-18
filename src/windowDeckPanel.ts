@@ -125,6 +125,7 @@ export class WindowDeckPanel {
       await this.actions.focusTerminal(message.windowId, message.terminalId);
     } else if (message.windowId && message.terminalId && typeof message.text === "string" && message.type === "terminalInput") {
       await this.actions.sendTerminalText(message.windowId, message.terminalId, message.text, Boolean(message.shouldExecute));
+      return;
     } else if (message.windowId && message.type === "newTerminal") {
       await this.actions.createTerminal(message.windowId);
     } else if (message.windowId && message.terminalId && message.type === "closeTerminal") {
@@ -226,6 +227,10 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     .merged-scroll { min-height: 0; overflow: auto; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
     .merged-window, .merged-terminal { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 22px; padding: 3px 8px; box-sizing: border-box; border: 0; outline: 1px solid transparent; outline-offset: -1px; color: inherit; background: transparent; cursor: pointer; text-align: left; font: inherit; }
     .merged-window:hover, .merged-terminal:hover { background: var(--vscode-list-hoverBackground); }
+    .merged-window.dragging { opacity: .45; transform: scale(.97); box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+    .merged-window.drop-merge { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; background: var(--vscode-list-hoverBackground); }
+    .merged-group-drop { margin: 8px; padding: 8px 6px; border: 1px dashed var(--vscode-widget-border); border-radius: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; text-align: center; }
+    .merged-group-drop.drop-into { border-color: var(--vscode-focusBorder); color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
     .merged-window.current, .merged-terminal.current { outline-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
     .merged-window.stale { opacity: .58; }
     .merged-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
@@ -236,7 +241,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     .terminal-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm { height: 100%; padding: 0 4px; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm-screen, .terminal-viewport .xterm-viewport { background: var(--vscode-terminal-background, var(--vscode-editor-background)) !important; }
-    .terminal-viewport textarea.xterm-helper-textarea { opacity: 0 !important; left: -10000px !important; top: 0 !important; width: 1px !important; height: 1px !important; resize: none !important; }
+    .xterm .xterm-helper-textarea, .terminal-viewport textarea.xterm-helper-textarea { opacity: 0 !important; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: transparent !important; background: transparent !important; left: -10000px !important; top: 0 !important; width: 1px !important; height: 1px !important; font-size: 1px !important; line-height: 1px !important; resize: none !important; }
     .terminal-output { flex: 1; min-height: 0; margin: 0; overflow: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
     .terminal-output-placeholder { color: var(--vscode-descriptionForeground); }
     .terminal-command { padding-bottom: 8px; color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
@@ -294,6 +299,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     let dragState = null;
     let editing = false;
     let activeTab = "quick";
+    let preserveTerminalFocus = false;
     let selectedMergedWindowId = "";
     let selectedMergedTerminalId = "";
     const persistedWebviewState = vscode.getState() || {};
@@ -324,6 +330,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
 
     function render() {
       const terminalFocused = Boolean(document.activeElement?.closest(".xterm"));
+      preserveTerminalFocus = terminalFocused;
       const scrollState = new Map([...deck.querySelectorAll("[data-scroll]")].map((element) => [element.dataset.scroll, element.scrollTop]));
       const oldOutput = deck.querySelector("[data-terminal-output]");
       const keepOutputAtBottom = !oldOutput || oldOutput.scrollHeight - oldOutput.scrollTop - oldOutput.clientHeight < 24;
@@ -335,7 +342,6 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         deck.querySelectorAll("[data-scroll]").forEach((element) => { element.scrollTop = scrollState.get(element.dataset.scroll) || 0; });
         const output = deck.querySelector("[data-terminal-output]");
         if (output && keepOutputAtBottom) output.scrollTop = output.scrollHeight;
-        if (terminalFocused) mountSelectedTerminal();
         mountSelectedTerminal();
       });
     }
@@ -370,6 +376,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     function mountSelectedTerminal() {
       const viewport = deck.querySelector("[data-terminal-viewport]");
       if (!viewport || !xtermReady || !selectedMergedWindowId || !selectedMergedTerminalId) return;
+      const preserveFocus = Boolean(document.activeElement?.closest(".xterm"));
       const key = terminalKey(selectedMergedWindowId, selectedMergedTerminalId);
       let view = terminalViews.get(key);
       if (!view) {
@@ -393,6 +400,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         viewport.replaceChildren(view.term.element);
       }
       view.fit.fit();
+      if (preserveFocus || preserveTerminalFocus) view.term.focus();
     }
 
     function renderSection(stale) {
@@ -473,7 +481,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         selectedMergedTerminalId = activeTerminal ? activeTerminal.terminalId : "";
       }
       const selectedTerminal = terminals.find((item) => item.terminalId === selectedMergedTerminalId);
-      const windowItems = windows.map((item) => '<button draggable="true" class="merged-window ' + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>').join("");
+      const windowItems = renderMergedWindows();
       const terminalItems = terminals.map((terminal) => '<button class="merged-terminal ' + (terminal.terminalId === selectedMergedTerminalId ? "current" : "") + '" data-merged-terminal="' + esc(terminal.terminalId) + '">' + terminalIcon(terminal.state || "idle") + '<span class="merged-name">' + esc(terminal.name || terminal.shell || "terminal") + '</span><span class="merged-state">' + esc(terminalStateLabel(terminal.state || "idle")) + '</span></button>').join("");
       const toolbarTitle = selectedTerminal ? ((selectedWindow ? selectedWindow.title + " · " : "") + (selectedTerminal.name || "terminal")) : "原生终端";
       const toolbar = '<div class="terminal-toolbar"><span class="terminal-toolbar-title">' + esc(toolbarTitle) + '</span>' +
@@ -482,7 +490,28 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="合并终端输出"></div></div>'
         : '<div class="terminal-unavailable"><strong>所选窗口没有终端</strong><span>合并终端页只展示终端，不会打开或切换 VS Code 窗口。</span></div>';
       const terminalTitle = '<div class="merged-title"><span>终端</span><span class="merged-title-actions"><button class="merged-title-action" data-new-terminal title="新建终端" aria-label="新建终端">＋</button></span></div>';
-      return '<div class="merged" style="--merged-left-width:' + Math.round(mergedLeftWidth) + 'px;--merged-right-width:' + Math.round(mergedRightWidth) + 'px"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '</div></aside><div class="merged-resizer" data-resize="left" role="separator" tabindex="0" aria-label="调整窗口看板宽度" aria-orientation="vertical"></div><section class="merged-main">' + toolbar + center + '</section><div class="merged-resizer" data-resize="right" role="separator" tabindex="0" aria-label="调整终端看板宽度" aria-orientation="vertical"></div><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
+      return '<div class="merged" style="--merged-left-width:' + Math.round(mergedLeftWidth) + 'px;--merged-right-width:' + Math.round(mergedRightWidth) + 'px"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '<div class="merged-group-drop" data-merged-group-drop>拖到这里创建分组</div></div></aside><div class="merged-resizer" data-resize="left" role="separator" tabindex="0" aria-label="调整窗口看板宽度" aria-orientation="vertical"></div><section class="merged-main">' + toolbar + center + '</section><div class="merged-resizer" data-resize="right" role="separator" tabindex="0" aria-label="调整终端看板宽度" aria-orientation="vertical"></div><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
+    }
+
+    function renderMergedWindows() {
+      const byId = new Map(windows.map((item) => [item.windowId, item]));
+      const grouped = new Set(layout.groups.flatMap((group) => group.windowIds));
+      const out = [];
+      for (const id of layout.order) {
+        const group = layout.groups.find((item) => item.windowIds[0] === id);
+        if (group) {
+          const items = group.windowIds.map((windowId) => byId.get(windowId)).filter(Boolean);
+          if (items.length) out.push('<section class="group ' + (group.collapsed ? "collapsed" : "") + '" data-group-id="' + esc(group.id) + '"><div class="group-head" draggable="true" data-group-id="' + esc(group.id) + '"><button class="icon" data-collapse="' + esc(group.id) + '">' + (group.collapsed ? "›" : "⌄") + '</button><span class="box" style="--item-color:' + esc(group.color || items[0].color) + '"></span><span class="group-title">' + esc(group.title || "分组") + '</span></div><div class="group-body">' + items.map((item) => renderMergedWindow(item, true)).join("") + '</div></section>');
+          continue;
+        }
+        const item = byId.get(id);
+        if (item && !grouped.has(id)) out.push(renderMergedWindow(item, false));
+      }
+      return out.join("");
+    }
+
+    function renderMergedWindow(item, child) {
+      return '<button draggable="true" class="merged-window ' + (child ? "child " : "") + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>';
     }
 
     function bind(scope) {
@@ -497,6 +526,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
           showWindowMenu(item.dataset.mergedWindow, event.clientX, event.clientY);
         });
         item.addEventListener("dragstart", (event) => {
+          event.stopPropagation();
           dragState = { type: "window", windowId: item.dataset.mergedWindow, original: cloneLayout(layout), committed: false };
           item.classList.add("dragging");
           event.dataTransfer.effectAllowed = "move";
@@ -505,16 +535,39 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         item.addEventListener("dragover", (event) => {
           if (!dragState || dragState.windowId === item.dataset.mergedWindow) return;
           event.preventDefault();
+          event.stopPropagation();
+          clearDropClasses();
           item.classList.add("drop-merge");
         });
         item.addEventListener("drop", (event) => {
           if (!dragState || dragState.type !== "window") return;
           event.preventDefault();
+          event.stopPropagation();
           mergeWindows(dragState.windowId, item.dataset.mergedWindow);
           dragState.committed = true;
           saveLayout();
         });
         item.addEventListener("dragend", finishDrag);
+      });
+      const mergedGroupDrop = scope.querySelector("[data-merged-group-drop]");
+      mergedGroupDrop?.addEventListener("dragover", (event) => {
+        if (!dragState || dragState.type !== "window") return;
+        event.preventDefault();
+        event.stopPropagation();
+        mergedGroupDrop.classList.add("drop-into");
+        mergedGroupDrop.textContent = "松开以创建分组";
+      });
+      mergedGroupDrop?.addEventListener("dragleave", () => mergedGroupDrop.classList.remove("drop-into"));
+      mergedGroupDrop?.addEventListener("drop", (event) => {
+        if (!dragState || dragState.type !== "window") return;
+        event.preventDefault();
+        event.stopPropagation();
+        const target = windows.find((item) => item.windowId !== dragState.windowId && !item.stale);
+        if (target) {
+          mergeWindows(dragState.windowId, target.windowId);
+          dragState.committed = true;
+          saveLayout();
+        }
       });
       scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("click", () => {
         selectedMergedTerminalId = item.dataset.mergedTerminal;
