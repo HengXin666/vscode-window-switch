@@ -11,6 +11,8 @@ type PanelActions = {
   focusWindow(windowId: string): Promise<void>;
   focusTerminal(windowId: string, terminalId: string): Promise<void>;
   sendTerminalText(windowId: string, terminalId: string, text: string, shouldExecute: boolean): Promise<void>;
+  createTerminal(windowId: string): Promise<void>;
+  closeTerminal(windowId: string, terminalId: string): Promise<void>;
   openWindow(windowId: string): Promise<void>;
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
@@ -135,6 +137,10 @@ export class WindowDeckPanel {
       await this.actions.focusTerminal(message.windowId, message.terminalId);
     } else if (message.windowId && message.terminalId && typeof message.text === "string" && message.type === "terminalInput") {
       await this.actions.sendTerminalText(message.windowId, message.terminalId, message.text, Boolean(message.shouldExecute));
+    } else if (message.windowId && message.type === "newTerminal") {
+      await this.actions.createTerminal(message.windowId);
+    } else if (message.windowId && message.terminalId && message.type === "closeTerminal") {
+      await this.actions.closeTerminal(message.windowId, message.terminalId);
     } else if (message.windowId && message.type === "remove") {
       await this.actions.removeWindow(message.windowId);
     } else if (message.windowId && message.type === "rename" && message.alias !== undefined) {
@@ -290,7 +296,6 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     let activeTab = "quick";
     let selectedMergedWindowId = "";
     let selectedMergedTerminalId = "";
-    let terminalInputDraft = "";
     const persistedWebviewState = vscode.getState() || {};
     let mergedLeftWidth = Number(persistedWebviewState.mergedLeftWidth) || 240;
     let mergedRightWidth = Number(persistedWebviewState.mergedRightWidth) || 280;
@@ -316,7 +321,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     document.addEventListener("click", (event) => { if (!event.target.closest("#menu")) closeMenu(); }, true);
 
     function render() {
-      const terminalInputFocused = document.activeElement && document.activeElement.matches("[data-terminal-input]");
+      const terminalFocused = Boolean(document.activeElement?.closest(".xterm"));
       const scrollState = new Map([...deck.querySelectorAll("[data-scroll]")].map((element) => [element.dataset.scroll, element.scrollTop]));
       const oldOutput = deck.querySelector("[data-terminal-output]");
       const keepOutputAtBottom = !oldOutput || oldOutput.scrollHeight - oldOutput.scrollTop - oldOutput.clientHeight < 24;
@@ -328,7 +333,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
         deck.querySelectorAll("[data-scroll]").forEach((element) => { element.scrollTop = scrollState.get(element.dataset.scroll) || 0; });
         const output = deck.querySelector("[data-terminal-output]");
         if (output && keepOutputAtBottom) output.scrollTop = output.scrollHeight;
-        if (terminalInputFocused) deck.querySelector("[data-terminal-input]")?.focus();
+        if (terminalFocused) mountSelectedTerminal();
         mountSelectedTerminal();
       });
     }
@@ -472,9 +477,9 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       const toolbar = '<div class="terminal-toolbar"><span class="terminal-toolbar-title">' + esc(toolbarTitle) + '</span>' +
         (selectedTerminal ? '<span class="terminal-toolbar-state">' + esc(terminalStateLabel(selectedTerminal.state || "idle")) + ' · 同步视图</span>' : '') + '</div>';
       const center = selectedTerminal
-        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="合并终端输出"></div><div class="terminal-input-row"><span class="terminal-prompt">›</span><input class="terminal-input" data-terminal-input type="text" spellcheck="false" placeholder="在此输入并按 Enter 发送"><button class="terminal-send" data-send-terminal>发送</button></div></div>'
+        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="合并终端输出"></div></div>'
         : '<div class="terminal-unavailable"><strong>所选窗口没有终端</strong><span>合并终端页只展示终端，不会打开或切换 VS Code 窗口。</span></div>';
-      const terminalTitle = '<div class="merged-title"><span>终端</span></div>';
+      const terminalTitle = '<div class="merged-title"><span>终端</span><span class="merged-title-actions"><button class="merged-title-action" data-new-terminal title="新建终端" aria-label="新建终端">＋</button></span></div>';
       return '<div class="merged" style="--merged-left-width:' + Math.round(mergedLeftWidth) + 'px;--merged-right-width:' + Math.round(mergedRightWidth) + 'px"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '</div></aside><div class="merged-resizer" data-resize="left" role="separator" tabindex="0" aria-label="调整窗口看板宽度" aria-orientation="vertical"></div><section class="merged-main">' + toolbar + center + '</section><div class="merged-resizer" data-resize="right" role="separator" tabindex="0" aria-label="调整终端看板宽度" aria-orientation="vertical"></div><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
     }
 
@@ -511,19 +516,17 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       });
       scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("click", () => {
         selectedMergedTerminalId = item.dataset.mergedTerminal;
-        terminalInputDraft = "";
         render();
       }));
+      scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        showTerminalMenu(item.dataset.mergedTerminal, event.clientX, event.clientY);
+      }));
+      scope.querySelector("[data-new-terminal]")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (selectedMergedWindowId) vscode.postMessage({ type: "newTerminal", windowId: selectedMergedWindowId });
+      });
       bindMergedResizers(scope);
-      const terminalInput = scope.querySelector("[data-terminal-input]");
-      if (terminalInput) {
-        terminalInput.addEventListener("input", () => { terminalInputDraft = terminalInput.value; });
-        terminalInput.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") { event.preventDefault(); sendTerminalInput(); }
-          if (event.key === "c" && event.ctrlKey) { event.preventDefault(); sendTerminalControl("\\x03"); }
-        });
-      }
-      scope.querySelector("[data-send-terminal]")?.addEventListener("click", sendTerminalInput);
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("button") || event.target.closest("input")) return;
@@ -678,20 +681,6 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       vscode.setState({ ...(vscode.getState() || {}), mergedLeftWidth: Math.round(mergedLeftWidth), mergedRightWidth: Math.round(mergedRightWidth) });
     }
 
-    function sendTerminalInput() {
-      const input = deck.querySelector("[data-terminal-input]");
-      const text = input ? input.value : terminalInputDraft;
-      if (!text || !selectedMergedTerminalId) return;
-      vscode.postMessage({ type: "terminalInput", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId, text, shouldExecute: true });
-      terminalInputDraft = "";
-      if (input) { input.value = ""; input.focus(); }
-    }
-
-    function sendTerminalControl(text) {
-      if (!selectedMergedTerminalId) return;
-      vscode.postMessage({ type: "terminalInput", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId, text, shouldExecute: false });
-    }
-
     function showWindowMenu(windowId, x, y) {
       menu.innerHTML = '<button data-cmd="rename">重命名标题</button><button data-cmd="remove">删除记录</button><div class="palette">' +
         COLORS.map((color) => '<button class="swatch" title="' + esc(color) + '" data-color="' + esc(color) + '" style="--swatch:' + esc(color) + '"></button>').join("") + '</div>';
@@ -699,6 +688,16 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       menu.querySelector('[data-cmd="rename"]').onclick = () => { closeMenu(); beginRenameWindow(windowId); };
       menu.querySelector('[data-cmd="remove"]').onclick = () => { closeMenu(); removeFromLayout(windowId); vscode.postMessage({ type: "remove", windowId }); };
       menu.querySelectorAll("[data-color]").forEach((button) => button.onclick = () => { closeMenu(); vscode.postMessage({ type: "color", windowId, color: button.dataset.color }); });
+    }
+
+    function showTerminalMenu(terminalId, x, y) {
+      menu.innerHTML = '<button data-cmd="close-terminal">关闭终端</button>';
+      placeMenu(x, y);
+      menu.querySelector('[data-cmd="close-terminal"]').onclick = () => {
+        closeMenu();
+        vscode.postMessage({ type: "closeTerminal", windowId: selectedMergedWindowId, terminalId });
+        if (selectedMergedTerminalId === terminalId) selectedMergedTerminalId = "";
+      };
     }
 
     function showGroupMenu(groupId, x, y) {

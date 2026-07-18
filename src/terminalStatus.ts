@@ -138,6 +138,20 @@ export class TerminalStatusTracker implements vscode.Disposable {
     return true;
   }
 
+  public createTerminal(): void {
+    const terminal = vscode.window.createTerminal({ name: "Window Deck" });
+    this.ensureTerminal(terminal);
+    terminal.show(false);
+  }
+
+  public closeTerminal(terminalId: string): boolean {
+    const entry = [...this.terminals.entries()].find(([, tracked]) => tracked.id === terminalId);
+    if (!entry) return false;
+    entry[0].dispose();
+    this.terminals.delete(entry[0]);
+    return true;
+  }
+
   private syncTerminals(): readonly vscode.Terminal[] {
     const current = new Set(vscode.window.terminals);
     for (const terminal of current) {

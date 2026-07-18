@@ -40,6 +40,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!terminalStatusTracker?.sendText(terminalId, data, false)) {
         void vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
       }
+    },
+    onControl: (action, terminalId) => {
+      if (action === "create") terminalStatusTracker?.createTerminal();
+      else if (!terminalId || !terminalStatusTracker?.closeTerminal(terminalId)) {
+        void vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
+      }
     }
   });
   await terminalStreamHub.start();
@@ -54,6 +60,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     focusWindow: focusRegisteredWindow,
     focusTerminal,
     sendTerminalText,
+    createTerminal,
+    closeTerminal,
     openWindow,
     renameWindow,
     setWindowColor,
@@ -278,6 +286,14 @@ async function sendTerminalText(windowId: string, terminalId: string, text: stri
   if (!terminalStatusTracker?.sendText(terminalId, text, shouldExecute)) {
     await vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
   }
+}
+
+async function createTerminal(windowId: string): Promise<void> {
+  terminalStreamHub?.sendControl(windowId, "create");
+}
+
+async function closeTerminal(windowId: string, terminalId: string): Promise<void> {
+  terminalStreamHub?.sendControl(windowId, "close", terminalId);
 }
 
 async function heartbeat(): Promise<void> {

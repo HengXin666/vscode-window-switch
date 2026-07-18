@@ -10,11 +10,13 @@ const WebSocketServerRuntime = wsRuntime.WebSocketServer;
 type TerminalStreamMessage =
   | { type: "register"; windowId: string }
   | { type: "data"; windowId: string; terminalId: string; data: string }
-  | { type: "input"; targetWindowId: string; terminalId: string; data: string };
+  | { type: "input"; targetWindowId: string; terminalId: string; data: string }
+  | { type: "control"; targetWindowId: string; action: "create" | "close"; terminalId?: string };
 
 type TerminalStreamCallbacks = {
   onData(windowId: string, terminalId: string, data: string): void;
   onInput(terminalId: string, data: string): void;
+  onControl(action: "create" | "close", terminalId?: string): void;
 };
 
 export class TerminalStreamHub {
@@ -88,6 +90,17 @@ export class TerminalStreamHub {
     else this.sendClient(message);
   }
 
+  public sendControl(targetWindowId: string, action: "create" | "close", terminalId?: string): void {
+    const message: TerminalStreamMessage = { type: "control", targetWindowId, action, terminalId };
+    if (targetWindowId === this.windowId) {
+      this.callbacks.onControl(action, terminalId);
+    } else if (this.server) {
+      this.sendToWindow(targetWindowId, message);
+    } else {
+      this.sendClient(message);
+    }
+  }
+
   private acceptPrimaryClient(socket: WebSocket): void {
     let registeredWindowId = "";
     socket.on("message", (raw) => {
@@ -101,6 +114,8 @@ export class TerminalStreamHub {
         this.broadcast(message);
         this.callbacks.onData(message.windowId, message.terminalId, message.data);
       } else if (message.type === "input") {
+        this.sendToWindow(message.targetWindowId, message);
+      } else if (message.type === "control") {
         this.sendToWindow(message.targetWindowId, message);
       }
     });
@@ -119,6 +134,10 @@ export class TerminalStreamHub {
   private sendToWindow(windowId: string, message: TerminalStreamMessage): void {
     if (windowId === this.primaryWindowId && message.type === "input") {
       this.callbacks.onInput(message.terminalId, message.data);
+      return;
+    }
+    if (windowId === this.primaryWindowId && message.type === "control") {
+      this.callbacks.onControl(message.action, message.terminalId);
       return;
     }
     const socket = this.clients.get(windowId);
@@ -141,6 +160,7 @@ export class TerminalStreamHub {
         this.callbacks.onData(message.windowId, message.terminalId, message.data);
       }
       else if (message.type === "input" && message.targetWindowId === this.windowId) this.callbacks.onInput(message.terminalId, message.data);
+      else if (message.type === "control" && message.targetWindowId === this.windowId) this.callbacks.onControl(message.action, message.terminalId);
     });
     client.on("close", () => {
       this.client = undefined;
@@ -202,6 +222,7 @@ function parseMessage(value: string): TerminalStreamMessage | undefined {
     if (message.type === "register" && typeof message.windowId === "string") return message as TerminalStreamMessage;
     if (message.type === "data" && typeof message.windowId === "string" && typeof message.terminalId === "string" && typeof message.data === "string") return message as TerminalStreamMessage;
     if (message.type === "input" && typeof message.targetWindowId === "string" && typeof message.terminalId === "string" && typeof message.data === "string") return message as TerminalStreamMessage;
+    if (message.type === "control" && typeof message.targetWindowId === "string" && (message.action === "create" || message.action === "close")) return message as TerminalStreamMessage;
   } catch {
     return undefined;
   }
