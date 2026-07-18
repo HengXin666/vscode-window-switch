@@ -27,6 +27,7 @@ export class TerminalStreamHub {
   private reconnectTimer?: NodeJS.Timeout;
   private readonly clients = new Map<string, WebSocket>();
   private readonly replay = new Map<string, string>();
+  private readonly recentData = new Map<string, { data: string; at: number }>();
   private readonly pendingMessages: TerminalStreamMessage[] = [];
   private disposed = false;
 
@@ -68,6 +69,7 @@ export class TerminalStreamHub {
 
   public publishData(terminalId: string, data: string): void {
     if (!data) return;
+    if (this.isDuplicateBurst(this.windowId, terminalId, data)) return;
     this.remember(this.windowId, terminalId, data);
     this.callbacks.onData(this.windowId, terminalId, data);
     const message: TerminalStreamMessage = { type: "data", windowId: this.windowId, terminalId, data };
@@ -110,6 +112,7 @@ export class TerminalStreamHub {
         registeredWindowId = message.windowId;
         this.clients.set(registeredWindowId, socket);
       } else if (message.type === "data") {
+        if (this.isDuplicateBurst(message.windowId, message.terminalId, message.data)) return;
         this.remember(message.windowId, message.terminalId, message.data);
         this.broadcast(message);
         this.callbacks.onData(message.windowId, message.terminalId, message.data);
@@ -156,6 +159,7 @@ export class TerminalStreamHub {
       const message = parseMessage(raw.toString());
       if (!message) return;
       if (message.type === "data") {
+        if (this.isDuplicateBurst(message.windowId, message.terminalId, message.data)) return;
         this.remember(message.windowId, message.terminalId, message.data);
         this.callbacks.onData(message.windowId, message.terminalId, message.data);
       }
@@ -198,6 +202,18 @@ export class TerminalStreamHub {
     const tail = combined.slice(-200_000);
     const newline = tail.indexOf("\n");
     this.replay.set(key, newline >= 0 ? tail.slice(newline + 1) : tail);
+  }
+
+  private isDuplicateBurst(windowId: string, terminalId: string, data: string): boolean {
+    // The workbench patch can report the same multi-character write twice in
+    // one event-loop turn. Suppress only that burst; single keystrokes remain
+    // untouched so fast repeated typing still reaches the shell.
+    if (data.length <= 1) return false;
+    const key = `${windowId}:${terminalId}`;
+    const now = Date.now();
+    const previous = this.recentData.get(key);
+    this.recentData.set(key, { data, at: now });
+    return Boolean(previous && previous.data === data && now - previous.at < 80);
   }
 }
 
