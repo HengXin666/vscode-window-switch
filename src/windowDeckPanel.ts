@@ -10,6 +10,7 @@ type PanelActions = {
   checkForUpdates(): Promise<void>;
   focusWindow(windowId: string): Promise<void>;
   focusTerminal(windowId: string, terminalId: string): Promise<void>;
+  sendTerminalText(windowId: string, terminalId: string, text: string, shouldExecute: boolean): Promise<void>;
   openWindow(windowId: string): Promise<void>;
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
@@ -24,6 +25,8 @@ type PanelMessage = {
   terminalId?: string;
   alias?: string;
   color?: string;
+  text?: string;
+  shouldExecute?: boolean;
   layout?: WindowDeckLayout;
 };
 
@@ -112,6 +115,8 @@ export class WindowDeckPanel {
       await this.actions.openWindow(message.windowId);
     } else if (message.windowId && message.terminalId && message.type === "terminal") {
       await this.actions.focusTerminal(message.windowId, message.terminalId);
+    } else if (message.windowId && message.terminalId && typeof message.text === "string" && message.type === "terminalInput") {
+      await this.actions.sendTerminalText(message.windowId, message.terminalId, message.text, Boolean(message.shouldExecute));
     } else if (message.windowId && message.type === "remove") {
       await this.actions.removeWindow(message.windowId);
     } else if (message.windowId && message.type === "rename" && message.alias !== undefined) {
@@ -131,9 +136,10 @@ function renderShell(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     :root { color-scheme: light dark; --radius: 6px; --indent: 28px; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     .surface { width: min(760px, calc(100vw - 24px)); margin: 12px auto; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 8px 28px rgba(0,0,0,.28); overflow: hidden; }
-    .surface.merged-mode { width: min(1180px, calc(100vw - 24px)); }
+    .surface.merged-mode { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
     .head { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); font-weight: 600; }
     .head small { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .head button { margin-left: 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 7px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; font-size: 11px; }
@@ -177,20 +183,37 @@ function renderShell(): string {
     .tab { align-self: stretch; min-width: 100px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; color: var(--vscode-tab-inactiveForeground); background: transparent; cursor: pointer; font: inherit; }
     .tab.active { border-bottom-color: var(--vscode-focusBorder); color: var(--vscode-tab-activeForeground); background: var(--vscode-tab-activeBackground); }
     .mode-help { margin-left: auto; align-self: center; color: var(--vscode-descriptionForeground); font-size: 11px; }
-    .merged { display: grid; grid-template-columns: minmax(170px, 24%) minmax(280px, 1fr) minmax(190px, 27%); min-height: min(620px, calc(100vh - 96px)); }
-    .merged-column { min-width: 0; border-right: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); }
+    #deck:not(.list) { min-height: 0; overflow: hidden; }
+    .merged { display: grid; grid-template-columns: clamp(180px, 20vw, 280px) minmax(320px, 1fr) clamp(210px, 24vw, 330px); width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+    .merged-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); }
     .merged-column:last-child { border-right: 0; border-left: 1px solid var(--vscode-widget-border); }
-    .merged-title { padding: 9px 10px; border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
-    .merged-window, .merged-terminal { display: flex; align-items: center; gap: 7px; width: calc(100% - 8px); min-height: 36px; margin: 4px; padding: 5px 8px; box-sizing: border-box; border: 1px solid transparent; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; text-align: left; font: inherit; }
+    .merged-title { display: flex; flex: 0 0 auto; align-items: center; min-height: 35px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground)); background: var(--vscode-sideBarSectionHeader-background, transparent); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .merged-title-actions { display: flex; gap: 2px; margin-left: auto; }
+    .merged-title-action { display: grid; width: 22px; height: 22px; padding: 0; place-items: center; border: 0; border-radius: 4px; color: var(--vscode-icon-foreground); background: transparent; cursor: pointer; }
+    .merged-title-action:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .merged-title-action svg { width: 16px; height: 16px; }
+    .merged-scroll { min-height: 0; overflow: auto; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+    .merged-window, .merged-terminal { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 22px; padding: 3px 8px; box-sizing: border-box; border: 0; outline: 1px solid transparent; outline-offset: -1px; color: inherit; background: transparent; cursor: pointer; text-align: left; font: inherit; }
     .merged-window:hover, .merged-terminal:hover { background: var(--vscode-list-hoverBackground); }
-    .merged-window.current, .merged-terminal.current { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .merged-window.current, .merged-terminal.current { outline-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
     .merged-window.stale { opacity: .58; }
-    .merged-main { display: flex; flex-direction: column; min-width: 0; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
-    .native-terminal { display: grid; flex: 1; place-content: center; gap: 12px; padding: 28px; color: var(--vscode-descriptionForeground); text-align: center; }
-    .native-terminal strong { color: var(--vscode-foreground); font-size: 14px; }
-    .native-terminal button { justify-self: center; padding: 6px 12px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; }
+    .merged-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
+    .terminal-toolbar { display: flex; flex: 0 0 auto; align-items: center; min-height: 35px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-panel-background, var(--vscode-editor-background)); }
+    .terminal-toolbar-title { min-width: 0; overflow: hidden; color: var(--vscode-foreground); text-overflow: ellipsis; white-space: nowrap; }
+    .terminal-toolbar-state { margin-left: 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .native-terminal { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 8px 12px 10px; color: var(--vscode-terminal-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); line-height: 1.4; }
+    .terminal-output { flex: 1; min-height: 0; margin: 0; overflow: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+    .terminal-output-placeholder { color: var(--vscode-descriptionForeground); }
+    .terminal-command { padding-bottom: 8px; color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
+    .terminal-input-row { display: grid; flex: 0 0 auto; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: center; padding-top: 7px; border-top: 1px solid var(--vscode-widget-border); }
+    .terminal-prompt { color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
+    .terminal-input { width: 100%; min-width: 0; border: 0; outline: 0; padding: 2px 0; color: var(--vscode-terminal-foreground, var(--vscode-input-foreground)); background: transparent; font: inherit; }
+    .terminal-send { border: 0; border-radius: 3px; padding: 3px 8px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: var(--vscode-font-size) var(--vscode-font-family); }
+    .terminal-unavailable { display: grid; flex: 1; place-content: center; gap: 7px; padding: 24px; color: var(--vscode-descriptionForeground); text-align: center; }
+    .terminal-unavailable strong { color: var(--vscode-foreground); }
     .merged-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .merged-state { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; white-space: nowrap; }
+    .merged-terminal svg { flex: 0 0 16px; width: 16px; height: 16px; color: var(--vscode-icon-foreground); }
     @media (max-width: 560px) {
       .row { grid-template-columns: 18px 12px minmax(0,1fr) auto; }
       .row > .terminals { grid-column: 3 / span 2; grid-row: 2; justify-content: flex-start; max-width: none; }
@@ -220,10 +243,11 @@ function renderShell(): string {
     let activeTab = "quick";
     let selectedMergedWindowId = "";
     let selectedMergedTerminalId = "";
+    let terminalInputDraft = "";
     document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
       activeTab = tab.dataset.tab;
       document.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item === tab));
-      modeHelp.textContent = activeTab === "quick" ? "终端仅显示状态，不可预览或操作" : "终端交互使用 VS Code 原生终端";
+      modeHelp.textContent = activeTab === "quick" ? "终端仅显示状态，不可预览或操作" : "与 VS Code 原生终端共享命令和输出";
       document.querySelector(".surface").classList.toggle("merged-mode", activeTab === "merged");
       render();
     }));
@@ -238,11 +262,19 @@ function renderShell(): string {
     document.addEventListener("click", (event) => { if (!event.target.closest("#menu")) closeMenu(); }, true);
 
     function render() {
+      const terminalInputFocused = document.activeElement && document.activeElement.matches("[data-terminal-input]");
+      const scrollState = new Map([...deck.querySelectorAll("[data-scroll]")].map((element) => [element.dataset.scroll, element.scrollTop]));
+      const oldOutput = deck.querySelector("[data-terminal-output]");
+      const keepOutputAtBottom = !oldOutput || oldOutput.scrollHeight - oldOutput.scrollTop - oldOutput.clientHeight < 24;
       renderWithFlip(() => {
         layout = normalizeLayout(layout);
         deck.classList.toggle("list", activeTab === "quick");
         deck.innerHTML = activeTab === "quick" ? (renderSection(false) + renderSection(true) || '<div class="empty">没有已注册的工作区窗口。</div>') : renderMergedTerminal();
         bind(deck);
+        deck.querySelectorAll("[data-scroll]").forEach((element) => { element.scrollTop = scrollState.get(element.dataset.scroll) || 0; });
+        const output = deck.querySelector("[data-terminal-output]");
+        if (output && keepOutputAtBottom) output.scrollTop = output.scrollHeight;
+        if (terminalInputFocused) deck.querySelector("[data-terminal-input]")?.focus();
       });
     }
 
@@ -326,10 +358,17 @@ function renderShell(): string {
       const selectedTerminal = terminals.find((item) => item.terminalId === selectedMergedTerminalId);
       const windowItems = windows.map((item) => '<button class="merged-window ' + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>').join("");
       const terminalItems = terminals.map((terminal) => '<button class="merged-terminal ' + (terminal.terminalId === selectedMergedTerminalId ? "current" : "") + '" data-merged-terminal="' + esc(terminal.terminalId) + '">' + terminalIcon(terminal.state || "idle") + '<span class="merged-name">' + esc(terminal.name || terminal.shell || "terminal") + '</span><span class="merged-state">' + esc(terminalStateLabel(terminal.state || "idle")) + '</span></button>').join("");
-      const center = selectedTerminal
-        ? '<div class="native-terminal"><strong>' + esc((selectedWindow ? selectedWindow.title + " · " : "") + (selectedTerminal.name || "terminal")) + '</strong><span>这里使用 VS Code 原生终端，不复制输出，也不模拟输入。</span><button data-open-native-terminal>打开并操作原生终端</button></div>'
-        : '<div class="native-terminal"><strong>当前窗口没有已打开的终端</strong><span>请先在该窗口创建终端。</span></div>';
-      return '<div class="merged"><aside class="merged-column"><div class="merged-title">窗口</div>' + (windowItems || '<div class="empty">没有窗口</div>') + '</aside><section class="merged-main"><div class="merged-title">原生终端</div>' + center + '</section><aside class="merged-column"><div class="merged-title">当前窗口的终端</div>' + (terminalItems || '<div class="empty">没有终端</div>') + '</aside></div>';
+      const canControl = selectedWindow && selectedWindow.windowId === currentWindowId;
+      const toolbarTitle = selectedTerminal ? ((selectedWindow ? selectedWindow.title + " · " : "") + (selectedTerminal.name || "terminal")) : "原生终端";
+      const toolbar = '<div class="terminal-toolbar"><span class="terminal-toolbar-title">' + esc(toolbarTitle) + '</span>' +
+        (selectedTerminal ? '<span class="terminal-toolbar-state">' + esc(terminalStateLabel(selectedTerminal.state || "idle")) + '</span><span class="merged-title-actions"><button class="merged-title-action" data-open-native-terminal title="聚焦 VS Code 原生终端"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3.5h12v9H2v-9Zm1 1v7h10v-7H3Zm1.5 1.25L7 8 4.5 10.25l-.75-.75L5.45 8l-1.7-1.5.75-.75ZM8 9h3v1H8V9Z"/></svg></button></span>' : '') + '</div>';
+      const center = selectedTerminal && canControl
+        ? '<div class="native-terminal"><pre class="terminal-output" data-terminal-output><span class="terminal-command">' + esc(selectedTerminal.commandLine || "") + '</span>' + (selectedTerminal.outputTail ? '\\n' + esc(selectedTerminal.outputTail) : '<span class="terminal-output-placeholder">\\n尚无可同步的命令输出。可在下方输入命令，或聚焦原生终端进行完整交互。</span>') + '</pre><div class="terminal-input-row"><span class="terminal-prompt">❯</span><input class="terminal-input" data-terminal-input autocomplete="off" spellcheck="false" value="' + esc(terminalInputDraft) + '" placeholder="输入命令并按 Enter"><button class="terminal-send" data-send-terminal>发送</button></div></div>'
+        : selectedTerminal
+          ? '<div class="terminal-unavailable"><strong>终端位于另一个 VS Code 窗口</strong><span>切换到该窗口后重新打开 Window Deck，即可输入；输出状态仍会在这里同步。</span></div>'
+          : '<div class="terminal-unavailable"><strong>当前窗口没有已打开的终端</strong><span>请先使用 VS Code 创建原生终端。</span></div>';
+      const terminalTitle = '<div class="merged-title"><span>终端</span><span class="merged-title-actions"><button class="merged-title-action" data-open-native-terminal title="聚焦选中的原生终端"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3.5h12v9H2v-9Zm1 1v7h10v-7H3Zm1.5 1.25L7 8 4.5 10.25l-.75-.75L5.45 8l-1.7-1.5.75-.75ZM8 9h3v1H8V9Z"/></svg></button></span></div>';
+      return '<div class="merged"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '</div></aside><section class="merged-main">' + toolbar + center + '</section><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
     }
 
     function bind(scope) {
@@ -342,12 +381,22 @@ function renderShell(): string {
       }));
       scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("click", () => {
         selectedMergedTerminalId = item.dataset.mergedTerminal;
-        vscode.postMessage({ type: "terminal", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId });
+        terminalInputDraft = "";
         render();
       }));
-      scope.querySelector("[data-open-native-terminal]")?.addEventListener("click", () => {
+      scope.querySelectorAll("[data-open-native-terminal]").forEach((button) => button.addEventListener("click", () => {
+        if (!selectedMergedTerminalId) return;
         vscode.postMessage({ type: "terminal", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId });
-      });
+      }));
+      const terminalInput = scope.querySelector("[data-terminal-input]");
+      if (terminalInput) {
+        terminalInput.addEventListener("input", () => { terminalInputDraft = terminalInput.value; });
+        terminalInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") { event.preventDefault(); sendTerminalInput(); }
+          if (event.key === "c" && event.ctrlKey) { event.preventDefault(); sendTerminalControl("\\x03"); }
+        });
+      }
+      scope.querySelector("[data-send-terminal]")?.addEventListener("click", sendTerminalInput);
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("button") || event.target.closest("input")) return;
@@ -431,6 +480,20 @@ function renderShell(): string {
         removeFromLayout(button.dataset.remove);
         vscode.postMessage({ type: "remove", windowId: button.dataset.remove });
       }));
+    }
+
+    function sendTerminalInput() {
+      const input = deck.querySelector("[data-terminal-input]");
+      const text = input ? input.value : terminalInputDraft;
+      if (!text || !selectedMergedTerminalId) return;
+      vscode.postMessage({ type: "terminalInput", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId, text, shouldExecute: true });
+      terminalInputDraft = "";
+      if (input) { input.value = ""; input.focus(); }
+    }
+
+    function sendTerminalControl(text) {
+      if (!selectedMergedTerminalId) return;
+      vscode.postMessage({ type: "terminalInput", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId, text, shouldExecute: false });
     }
 
     function showWindowMenu(windowId, x, y) {

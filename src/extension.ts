@@ -38,6 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     checkForUpdates: () => updateManager.checkForUpdates({ manual: true }),
     focusWindow: focusRegisteredWindow,
     focusTerminal,
+    sendTerminalText,
     openWindow,
     renameWindow,
     setWindowColor,
@@ -193,6 +194,16 @@ async function focusTerminal(windowId: string, terminalId: string): Promise<void
     return;
   }
   if (!(await terminalStatusTracker?.focusTerminal(terminalId))) {
+    await vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
+  }
+}
+
+async function sendTerminalText(windowId: string, terminalId: string, text: string, shouldExecute: boolean): Promise<void> {
+  if (windowId !== currentWindowId) {
+    await vscode.window.showInformationMessage("请先切换到终端所在的 VS Code 窗口，再发送输入。");
+    return;
+  }
+  if (!terminalStatusTracker?.sendText(terminalId, text, shouldExecute)) {
     await vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
   }
 }

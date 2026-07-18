@@ -100,7 +100,16 @@ export class TerminalStatusTracker implements vscode.Disposable {
     if (!terminal) {
       return false;
     }
-    terminal.show(true);
+    terminal.show(false);
+    return true;
+  }
+
+  public sendText(terminalId: string, text: string, shouldExecute: boolean): boolean {
+    const terminal = [...this.terminals.entries()].find(([, tracked]) => tracked.id === terminalId)?.[0];
+    if (!terminal) {
+      return false;
+    }
+    terminal.sendText(text, shouldExecute);
     return true;
   }
 
