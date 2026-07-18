@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -38,9 +38,6 @@
   "main": "./dist/extension.js",
   "extensionKind": [
     "ui"
-  ],
-  "enabledApiProposals": [
-    "terminalDataWriteEvent"
   ],
   "contributes": {
     "commands": [

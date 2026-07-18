@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import * as childProcess from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 import { GitHubVsixUpdateManager } from "./vendor/githubUpdater";
 import { BridgeServer } from "./bridgeServer";
@@ -118,6 +120,7 @@ async function installWorkbenchPatch(): Promise<void> {
   const script = patchScriptPath("install");
   try {
     await runElevatedScript(script);
+    await setLocalTerminalApiDeclaration(true);
     const picked = await vscode.window.showInformationMessage("Window Deck 已获得原始终端数据权限。请完全退出并重新打开 VS Code，之后正常启动即可。", "退出 VS Code");
     if (picked === "退出 VS Code") await vscode.commands.executeCommand("workbench.action.quit");
   } catch (error) {
@@ -131,6 +134,7 @@ async function uninstallWorkbenchPatch(): Promise<void> {
   const script = patchScriptPath("uninstall");
   try {
     await runElevatedScript(script);
+    await setLocalTerminalApiDeclaration(false);
     const picked = await vscode.window.showInformationMessage("Window Deck 终端权限已移除。请完全退出并重新打开 VS Code。", "退出 VS Code");
     if (picked === "退出 VS Code") await vscode.commands.executeCommand("workbench.action.quit");
   } catch (error) {
@@ -138,6 +142,17 @@ async function uninstallWorkbenchPatch(): Promise<void> {
       if (picked === "复制命令") await vscode.env.clipboard.writeText(elevatedScriptCommand(script));
     });
   }
+}
+
+async function setLocalTerminalApiDeclaration(enabled: boolean): Promise<void> {
+  const manifestPath = path.join(extensionPath, "package.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { enabledApiProposals?: string[] };
+  const current = Array.isArray(manifest.enabledApiProposals) ? manifest.enabledApiProposals : [];
+  const proposals = current.filter((proposal) => proposal !== "terminalDataWriteEvent");
+  if (enabled) proposals.push("terminalDataWriteEvent");
+  if (proposals.length > 0) manifest.enabledApiProposals = proposals;
+  else delete manifest.enabledApiProposals;
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
 function runElevatedScript(script: string): Promise<void> {
