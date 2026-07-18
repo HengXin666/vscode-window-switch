@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -172,11 +172,12 @@
     }
   },
   "scripts": {
-    "compile": "rm -rf dist && tsc -p ./ && mkdir -p dist/vendor dist/webview && cp ../vscode-extension-github-updater/dist/index.js dist/vendor/githubUpdater.js && cp node_modules/@xterm/xterm/lib/xterm.mjs dist/webview/xterm.mjs && cp node_modules/@xterm/addon-fit/lib/addon-fit.mjs dist/webview/addon-fit.mjs && cp node_modules/@xterm/xterm/css/xterm.css dist/webview/xterm.css",
+    "compile": "rm -rf dist && tsc -p ./ && mkdir -p dist/vendor/ws dist/webview && cp ../vscode-extension-github-updater/dist/index.js dist/vendor/githubUpdater.js && cp node_modules/ws/index.js node_modules/ws/package.json dist/vendor/ws/ && cp -R node_modules/ws/lib dist/vendor/ws/ && cp node_modules/@xterm/xterm/lib/xterm.mjs dist/webview/xterm.mjs && cp node_modules/@xterm/addon-fit/lib/addon-fit.mjs dist/webview/addon-fit.mjs && cp node_modules/@xterm/xterm/css/xterm.css dist/webview/xterm.css",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --no-dependencies",
+    "verify:runtime": "node -e \"require('./dist/terminalStream.js')\"",
+    "package": "npm run verify:runtime && vsce package --no-dependencies",
     "check": "npm run compile && npm run lint"
   },
   "devDependencies": {

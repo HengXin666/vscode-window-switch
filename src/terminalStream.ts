@@ -1,4 +1,11 @@
-import WebSocket, { WebSocketServer } from "ws";
+import type WebSocket from "ws";
+import type { WebSocketServer } from "ws";
+
+// The runtime is copied into dist/vendor so the VSIX is self-contained.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const wsRuntime = require("./vendor/ws") as typeof import("ws");
+const WebSocketClient = wsRuntime;
+const WebSocketServerRuntime = wsRuntime.WebSocketServer;
 
 type TerminalStreamMessage =
   | { type: "register"; windowId: string }
@@ -30,7 +37,7 @@ export class TerminalStreamHub {
   public async start(): Promise<void> {
     this.disposed = false;
     if (this.server || this.client) return;
-    const server = new WebSocketServer({ host: "127.0.0.1", port: TerminalStreamHub.port });
+    const server = new WebSocketServerRuntime({ host: "127.0.0.1", port: TerminalStreamHub.port });
     try {
       await waitForListening(server);
       this.server = server;
@@ -105,7 +112,7 @@ export class TerminalStreamHub {
   private broadcast(message: TerminalStreamMessage): void {
     const payload = JSON.stringify(message);
     for (const socket of this.clients.values()) {
-      if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+      if (socket.readyState === WebSocketClient.OPEN) socket.send(payload);
     }
   }
 
@@ -115,12 +122,12 @@ export class TerminalStreamHub {
       return;
     }
     const socket = this.clients.get(windowId);
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    if (socket?.readyState === WebSocketClient.OPEN) socket.send(JSON.stringify(message));
   }
 
   private connectToPrimary(): void {
     if (this.disposed || this.client) return;
-    const client = new WebSocket(`ws://127.0.0.1:${TerminalStreamHub.port}`);
+    const client = new WebSocketClient(`ws://127.0.0.1:${TerminalStreamHub.port}`);
     this.client = client;
     client.on("open", () => {
       client.send(JSON.stringify({ type: "register", windowId: this.windowId } satisfies TerminalStreamMessage));
@@ -143,7 +150,7 @@ export class TerminalStreamHub {
   }
 
   private sendClient(message: TerminalStreamMessage): void {
-    if (this.client?.readyState === WebSocket.OPEN) this.client.send(JSON.stringify(message));
+    if (this.client?.readyState === WebSocketClient.OPEN) this.client.send(JSON.stringify(message));
     else {
       this.pendingMessages.push(message);
       this.connectToPrimary();
