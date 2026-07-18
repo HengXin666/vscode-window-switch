@@ -32,7 +32,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   terminalStatusTracker = new TerminalStatusTracker();
   context.subscriptions.push(terminalStatusTracker);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.command = "windowDeck.showWindows";
+  statusBarItem.command = "windowDeck.openPanel";
   context.subscriptions.push(statusBarItem);
   deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     checkForUpdates: () => updateManager.checkForUpdates({ manual: true }),
@@ -534,7 +534,10 @@ function terminalQuickPickDetail(terminals: WindowTerminalRecord[] | undefined):
     counts.waitingInput > 0 ? `${counts.waitingInput} 等待输入` : undefined,
     counts.idle > 0 ? `${counts.idle} 空闲` : undefined
   ].filter(Boolean).join(" · ");
-  return `终端：${summary}`;
+  const commands = items
+    .map((terminal, index) => `${index + 1}. ${terminal.commandLine || terminal.name || terminal.shell || "terminal"}`)
+    .join("  |  ");
+  return `终端：${summary}    命令：${commands}`;
 }
 
 function sortedTerminals(terminals: WindowTerminalRecord[] | undefined): WindowTerminalRecord[] {

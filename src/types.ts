@@ -11,6 +11,7 @@ export type WindowTerminalRecord = {
   order: number;
   state: TerminalActivityState;
   commandLine?: string;
+  outputTail?: string;
   shell?: string;
   processId?: number;
   activeSince?: number;

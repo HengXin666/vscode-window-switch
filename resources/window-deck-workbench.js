@@ -4,6 +4,7 @@
   let state = { windows: [], layout: { order: [], groups: [] }, currentWindowId: "" };
   let open = false;
   let dragState = null;
+  let selectedTerminal = null;
   let lastCommandSeq = -1;
   const scriptStartedAt = Date.now();
 
@@ -14,7 +15,7 @@
     .window-deck-button:hover { background: var(--vscode-toolbar-hoverBackground); }
     .window-deck-overlay { position: fixed; inset: 0; z-index: 999998; display: none; pointer-events: none; }
     .window-deck-overlay.open { display: block; }
-    .window-deck-popup { position: absolute; top: 34px; right: 10px; width: min(620px, calc(100vw - 20px)); max-height: min(560px, calc(100vh - 60px)); overflow: auto; padding: 6px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 12px 34px rgba(0,0,0,.38); pointer-events: auto; opacity: 0; transform: translateY(-6px) scale(.985); transition: opacity .12s ease, transform .12s ease; }
+    .window-deck-popup { position: absolute; top: 34px; right: 10px; width: min(820px, calc(100vw - 20px)); max-height: min(680px, calc(100vh - 60px)); overflow: auto; padding: 6px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 12px 34px rgba(0,0,0,.38); pointer-events: auto; opacity: 0; transform: translateY(-6px) scale(.985); transition: opacity .12s ease, transform .12s ease; }
     .window-deck-overlay.open .window-deck-popup { opacity: 1; transform: translateY(0) scale(1); }
     .window-deck-section { padding: 7px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; }
     .window-deck-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) minmax(0, auto) auto; gap: 8px; align-items: center; min-height: 32px; padding: 5px 7px; margin: 2px 0; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; user-select: none; transition: transform .14s ease, background-color .12s ease, opacity .12s ease, box-shadow .12s ease, outline-color .12s ease; }
@@ -25,12 +26,19 @@
     .window-deck-box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--wd-color), #000 18%); background: var(--wd-color); box-sizing: border-box; }
     .window-deck-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; display: flex; align-items: center; gap: 6px; }
     .window-deck-meta { min-width: 0; max-width: min(220px, 32%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
-    .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 120px; }
-    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: pointer; }
+    .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 330px; }
+    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 220px; height: 20px; padding: 0 6px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: pointer; }
     .window-deck-terminal.running { --wd-terminal-color: #3794ff; }
     .window-deck-terminal.waitingInput { --wd-terminal-color: #d29922; }
     .window-deck-terminal.idle { --wd-terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .window-deck-terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--wd-terminal-color); }
+    .window-deck-terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .window-deck-terminal-detail { margin: 6px 2px 8px; border: 1px solid var(--vscode-focusBorder); border-radius: 5px; overflow: hidden; background: var(--vscode-textCodeBlock-background); }
+    .window-deck-terminal-detail-head { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 8px; border-bottom: 1px solid var(--vscode-widget-border); font-weight: 600; }
+    .window-deck-terminal-detail-head button { margin-left: auto; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 8px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; }
+    .window-deck-terminal-command, .window-deck-terminal-output { margin: 0; padding: 8px; font: 11px var(--monaco-monospace-font, monospace); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    .window-deck-terminal-command { border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-terminal-ansiGreen); }
+    .window-deck-terminal-output { max-height: 240px; overflow: auto; color: var(--vscode-terminal-foreground); }
     .window-deck-rename { width: 100%; min-height: 24px; box-sizing: border-box; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; padding: 2px 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: inherit; }
     .window-deck-icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .window-deck-icon:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -153,7 +161,7 @@
     if (!open) return;
     state.layout = normalizeLayout(state.layout || { order: [], groups: [] });
     const popup = overlay.querySelector(".window-deck-popup");
-    const html = renderSection(false) + renderSection(true);
+    const html = renderTerminalDetail() + renderSection(false) + renderSection(true);
     popup.innerHTML = html || '<div class="window-deck-empty">没有已注册的工作区窗口</div>';
     bind(popup);
   }
@@ -209,8 +217,21 @@
     if (!items.length) return '<span class="window-deck-terminals"></span>';
     return '<span class="window-deck-terminals">' + items.map((terminal, index) => {
       const status = terminal.state || "idle";
-      return `<button class="window-deck-terminal ${esc(status)}" data-terminal-id="${esc(terminal.terminalId)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)} ${terminal.name || "terminal"}`)}">${terminalIcon(status)}</button>`;
+      const label = terminal.commandLine || terminal.name || terminal.shell || "terminal";
+      return `<button class="window-deck-terminal ${esc(status)}" data-terminal-id="${esc(terminal.terminalId)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)} ${label}`)}">${terminalIcon(status)}<span class="window-deck-terminal-label">${esc(label)}</span></button>`;
     }).join("") + '</span>';
+  }
+
+  function renderTerminalDetail() {
+    const selected = selectedTerminal && findWindow(selectedTerminal.windowId);
+    const terminal = selected && (selected.terminals || []).find(item => item.terminalId === selectedTerminal.terminalId);
+    if (!selected || !terminal) {
+      selectedTerminal = null;
+      return "";
+    }
+    const command = terminal.commandLine || "（当前没有可识别的命令）";
+    const output = terminal.outputTail || "（尚未捕获到输出；无法读取打开扩展之前的终端历史。）";
+    return `<section class="window-deck-terminal-detail"><div class="window-deck-terminal-detail-head"><span>${esc(selected.title)} · ${esc(terminal.name || "terminal")} · ${esc(terminalStateLabel(terminal.state || "idle"))}</span><button data-open-terminal>转到终端</button></div><pre class="window-deck-terminal-command">${esc(command)}</pre><pre class="window-deck-terminal-output">${esc(output)}</pre></section>`;
   }
 
   function terminalStateLabel(status) {
@@ -229,10 +250,17 @@
       event.stopPropagation();
       const row = terminal.closest("[data-window-id]");
       if (row) {
-        closeOverlay();
-        action({ type: "terminal", windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId });
+        selectedTerminal = { windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId };
+        render();
       }
     }));
+    scope.querySelector("[data-open-terminal]")?.addEventListener("click", event => {
+      event.stopPropagation();
+      if (!selectedTerminal) return;
+      const target = selectedTerminal;
+      closeOverlay();
+      action({ type: "terminal", windowId: target.windowId, terminalId: target.terminalId });
+    });
     scope.querySelectorAll(".window-deck-row").forEach(row => {
       row.addEventListener("click", event => {
         if (event.target.closest("button") || event.target.closest("input")) return;

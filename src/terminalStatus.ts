@@ -85,6 +85,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
         order: index,
         state: this.stateFor(tracked, seenAt),
         commandLine: tracked.commandLine ?? tracked.fallbackCommandLine,
+        outputTail: tracked.outputTail || undefined,
         shell: terminal.state.shell,
         processId: tracked.processId,
         activeSince: tracked.activeSince,
@@ -148,10 +149,9 @@ export class TerminalStatusTracker implements vscode.Disposable {
       return;
     }
     tracked.activeExecution = undefined;
-    tracked.commandLine = undefined;
-    tracked.activeSince = undefined;
-    tracked.lastOutputAt = undefined;
-    tracked.outputTail = "";
+    // Keep the last command and its captured output available to Window Deck.
+    // VS Code does not expose arbitrary terminal scrollback, so this is the
+    // useful preview we can retain after shell execution finishes.
   }
 
   private async readExecutionOutput(terminal: vscode.Terminal, execution: vscode.TerminalShellExecution, executionSeq: number): Promise<void> {

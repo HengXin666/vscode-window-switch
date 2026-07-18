@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -130,7 +130,7 @@
     "menus": {
       "editor/title": [
         {
-          "command": "windowDeck.showWindows",
+          "command": "windowDeck.openPanel",
           "group": "navigation"
         }
       ],

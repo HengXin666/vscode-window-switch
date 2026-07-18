@@ -159,6 +159,15 @@ function renderShell(): string {
     .terminal.idle { --terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--terminal-color); }
     .terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .terminal-detail { margin: 0 12px 12px; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-textCodeBlock-background); overflow: hidden; }
+    .terminal-detail[hidden] { display: none; }
+    .terminal-detail-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); }
+    .terminal-detail-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .terminal-detail-state { color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .terminal-detail-actions { display: flex; gap: 6px; margin-left: auto; }
+    .terminal-detail button { border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 8px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; }
+    .terminal-detail-command { margin: 0; padding: 10px; border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-terminal-ansiGreen); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    .terminal-detail-output { max-height: min(300px, 38vh); margin: 0; padding: 10px; overflow: auto; color: var(--vscode-terminal-foreground); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
     .group { margin: 2px 0 4px; }
@@ -181,21 +190,24 @@ function renderShell(): string {
 </head>
 <body>
   <main class="surface">
-    <div class="head">Window Deck <small>点击窗口切换 · 点击终端打开命令行</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
+    <div class="head">Window Deck <small>点击命令查看内容</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
     <div class="list" id="deck"></div>
   </main>
+  <section class="terminal-detail" id="terminal-detail" hidden></section>
   <div class="menu" id="menu"></div>
   <script>
     const vscode = acquireVsCodeApi();
     const COLORS = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
     const deck = document.getElementById("deck");
     const menu = document.getElementById("menu");
+    const terminalDetail = document.getElementById("terminal-detail");
     document.getElementById("check-updates").addEventListener("click", () => vscode.postMessage({ type: "checkForUpdates" }));
     let windows = [];
     let layout = { order: [], groups: [] };
     let currentWindowId = "";
     let dragState = null;
     let editing = false;
+    let selectedTerminal = null;
 
     window.addEventListener("message", (event) => {
       if (event.data.type !== "windows") return;
@@ -211,6 +223,7 @@ function renderShell(): string {
         layout = normalizeLayout(layout);
         deck.innerHTML = renderSection(false) + renderSection(true) || '<div class="empty">没有已注册的工作区窗口。</div>';
         bind(deck);
+        renderTerminalDetail();
       });
     }
 
@@ -282,11 +295,45 @@ function renderShell(): string {
       return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M2.75 4.25h10.5v7.5H2.75zM5 6.5 7 8l-2 1.5M8.25 9.5h2.5"/></svg>';
     }
 
+    function findTerminal(windowId, terminalId) {
+      const item = findWindow(windowId);
+      const terminal = (item && item.terminals || []).find((candidate) => candidate.terminalId === terminalId);
+      return item && terminal ? { item, terminal } : null;
+    }
+
+    function renderTerminalDetail() {
+      const selected = selectedTerminal && findTerminal(selectedTerminal.windowId, selectedTerminal.terminalId);
+      if (!selected) {
+        selectedTerminal = null;
+        terminalDetail.hidden = true;
+        terminalDetail.innerHTML = "";
+        return;
+      }
+      const command = selected.terminal.commandLine || "（当前没有可识别的命令）";
+      const output = selected.terminal.outputTail || "（尚未捕获到输出；VS Code 扩展 API 无法读取打开扩展之前的终端历史。）";
+      terminalDetail.hidden = false;
+      terminalDetail.innerHTML = '<div class="terminal-detail-head"><span class="terminal-detail-title">' + esc(selected.item.title + " · " + (selected.terminal.name || "terminal")) + '</span>' +
+        '<span class="terminal-detail-state">' + esc(terminalStateLabel(selected.terminal.state || "idle")) + '</span>' +
+        '<span class="terminal-detail-actions"><button data-open-selected>转到终端</button><button data-close-terminal-detail>关闭</button></span></div>' +
+        '<pre class="terminal-detail-command">' + esc(command) + '</pre><pre class="terminal-detail-output">' + esc(output) + '</pre>';
+      terminalDetail.querySelector("[data-open-selected]").addEventListener("click", () => {
+        vscode.postMessage({ type: "terminal", windowId: selectedTerminal.windowId, terminalId: selectedTerminal.terminalId });
+      });
+      terminalDetail.querySelector("[data-close-terminal-detail]").addEventListener("click", () => {
+        selectedTerminal = null;
+        renderTerminalDetail();
+      });
+    }
+
     function bind(scope) {
       scope.querySelectorAll("[data-terminal-id]").forEach((terminal) => terminal.addEventListener("click", (event) => {
         event.stopPropagation();
         const row = terminal.closest("[data-window-id]");
-        if (row) vscode.postMessage({ type: "terminal", windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId });
+        if (row) {
+          selectedTerminal = { windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId };
+          renderTerminalDetail();
+          terminalDetail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
       }));
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
