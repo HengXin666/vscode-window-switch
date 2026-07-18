@@ -7,7 +7,9 @@ import { compactPath, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 
 type PanelActions = {
+  checkForUpdates(): Promise<void>;
   focusWindow(windowId: string): Promise<void>;
+  focusTerminal(windowId: string, terminalId: string): Promise<void>;
   openWindow(windowId: string): Promise<void>;
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
@@ -19,6 +21,7 @@ type PanelActions = {
 type PanelMessage = {
   type: string;
   windowId?: string;
+  terminalId?: string;
   alias?: string;
   color?: string;
   layout?: WindowDeckLayout;
@@ -101,10 +104,14 @@ export class WindowDeckPanel {
   private async handleMessage(message: PanelMessage): Promise<void> {
     if (message.type === "layout" && message.layout) {
       await this.actions.saveLayout(message.layout);
+    } else if (message.type === "checkForUpdates") {
+      await this.actions.checkForUpdates();
     } else if (message.windowId && message.type === "focus") {
       await this.actions.focusWindow(message.windowId);
     } else if (message.windowId && message.type === "open") {
       await this.actions.openWindow(message.windowId);
+    } else if (message.windowId && message.terminalId && message.type === "terminal") {
+      await this.actions.focusTerminal(message.windowId, message.terminalId);
     } else if (message.windowId && message.type === "remove") {
       await this.actions.removeWindow(message.windowId);
     } else if (message.windowId && message.type === "rename" && message.alias !== undefined) {
@@ -127,6 +134,8 @@ function renderShell(): string {
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     .surface { width: min(760px, calc(100vw - 24px)); margin: 12px auto; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 8px 28px rgba(0,0,0,.28); overflow: hidden; }
     .head { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); font-weight: 600; }
+    .head small { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
+    .head button { margin-left: 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 7px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; font-size: 11px; }
     .list { max-height: calc(100vh - 90px); overflow: auto; padding: 6px; }
     .section { padding: 8px 6px 4px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; }
     .row, .group-head { display: grid; grid-template-columns: 18px 12px minmax(0,1fr) auto; gap: 7px; align-items: center; min-height: 32px; padding: 4px 7px; margin: 2px 0; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; user-select: none; transition: transform .14s ease, background-color .12s ease, opacity .12s ease, box-shadow .12s ease, outline-color .12s ease; }
@@ -141,10 +150,11 @@ function renderShell(): string {
     .merge-hint { color: var(--vscode-focusBorder); font-size: 11px; font-weight: 600; margin-left: 8px; }
     .box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--item-color), #000 18%); background: var(--item-color); box-sizing: border-box; }
     .title, .group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-    .meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
+    .title { display: flex; align-items: center; gap: 6px; }
+    .meta { min-width: 0; max-width: min(220px, 32%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 300px; }
-    .terminal { --terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
-    .terminal.running { --terminal-color: #3fb950; }
+    .terminal { --terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: pointer; }
+    .terminal.running { --terminal-color: #3794ff; }
     .terminal.waitingInput { --terminal-color: #d29922; }
     .terminal.idle { --terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--terminal-color); }
@@ -171,7 +181,7 @@ function renderShell(): string {
 </head>
 <body>
   <main class="surface">
-    <div class="head">Window Deck</div>
+    <div class="head">Window Deck <small>点击窗口切换 · 点击终端打开命令行</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
     <div class="list" id="deck"></div>
   </main>
   <div class="menu" id="menu"></div>
@@ -180,6 +190,7 @@ function renderShell(): string {
     const COLORS = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
     const deck = document.getElementById("deck");
     const menu = document.getElementById("menu");
+    document.getElementById("check-updates").addEventListener("click", () => vscode.postMessage({ type: "checkForUpdates" }));
     let windows = [];
     let layout = { order: [], groups: [] };
     let currentWindowId = "";
@@ -252,8 +263,8 @@ function renderShell(): string {
       return '<span class="terminals">' + items.map((terminal, index) => {
         const state = terminal.state || "idle";
         const label = terminalLabel(terminal);
-        return '<span class="terminal ' + esc(state) + '" title="' + esc((index + 1) + ". " + terminalStateLabel(state) + " " + label) + '">' +
-          terminalIcon(state) + '<span class="terminal-label">' + esc(label) + '</span></span>';
+        return '<button class="terminal ' + esc(state) + '" data-terminal-id="' + esc(terminal.terminalId) + '" title="' + esc((index + 1) + ". " + terminalStateLabel(state) + " " + label) + '">' +
+          terminalIcon(state) + '<span class="terminal-label">' + esc(label) + '</span></button>';
       }).join("") + '</span>';
     }
 
@@ -272,6 +283,11 @@ function renderShell(): string {
     }
 
     function bind(scope) {
+      scope.querySelectorAll("[data-terminal-id]").forEach((terminal) => terminal.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const row = terminal.closest("[data-window-id]");
+        if (row) vscode.postMessage({ type: "terminal", windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId });
+      }));
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("button") || event.target.closest("input")) return;

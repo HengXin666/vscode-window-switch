@@ -23,11 +23,11 @@
     .window-deck-row.stale { opacity: .62; }
     .window-deck-row.dragging, .window-deck-group.dragging { opacity: .42; transform: scale(.985); }
     .window-deck-box { width: 12px; height: 12px; border-radius: 2px; border: 1px solid color-mix(in srgb, var(--wd-color), #000 18%); background: var(--wd-color); box-sizing: border-box; }
-    .window-deck-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
-    .window-deck-meta { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; margin-left: 7px; }
+    .window-deck-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .window-deck-meta { min-width: 0; max-width: min(220px, 32%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .window-deck-terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 120px; }
-    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font-size: 10px; line-height: 18px; }
-    .window-deck-terminal.running { --wd-terminal-color: #3fb950; }
+    .window-deck-terminal { --wd-terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--wd-terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--wd-terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: pointer; }
+    .window-deck-terminal.running { --wd-terminal-color: #3794ff; }
     .window-deck-terminal.waitingInput { --wd-terminal-color: #d29922; }
     .window-deck-terminal.idle { --wd-terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .window-deck-terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--wd-terminal-color); }
@@ -209,7 +209,7 @@
     if (!items.length) return '<span class="window-deck-terminals"></span>';
     return '<span class="window-deck-terminals">' + items.map((terminal, index) => {
       const status = terminal.state || "idle";
-      return `<span class="window-deck-terminal ${esc(status)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)}`)}">${terminalIcon(status)}</span>`;
+      return `<button class="window-deck-terminal ${esc(status)}" data-terminal-id="${esc(terminal.terminalId)}" title="${esc(`${index + 1}. ${terminalStateLabel(status)} ${terminal.name || "terminal"}`)}">${terminalIcon(status)}</button>`;
     }).join("") + '</span>';
   }
 
@@ -225,6 +225,14 @@
   }
 
   function bind(scope) {
+    scope.querySelectorAll("[data-terminal-id]").forEach(terminal => terminal.addEventListener("click", event => {
+      event.stopPropagation();
+      const row = terminal.closest("[data-window-id]");
+      if (row) {
+        closeOverlay();
+        action({ type: "terminal", windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId });
+      }
+    }));
     scope.querySelectorAll(".window-deck-row").forEach(row => {
       row.addEventListener("click", event => {
         if (event.target.closest("button") || event.target.closest("input")) return;

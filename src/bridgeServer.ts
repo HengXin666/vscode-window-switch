@@ -8,6 +8,7 @@ import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } fro
 
 type BridgeActions = {
   focusWindow(windowId: string): Promise<void>;
+  focusTerminal(windowId: string, terminalId: string): Promise<void>;
   openWindow(windowId: string): Promise<void>;
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
@@ -128,6 +129,8 @@ export class BridgeServer implements vscode.Disposable {
       await this.actions.saveLayout(action.layout);
     } else if (windowId && type === "focus") {
       await this.actions.focusWindow(windowId);
+    } else if (windowId && type === "terminal" && typeof action.terminalId === "string") {
+      await this.actions.focusTerminal(windowId, action.terminalId);
     } else if (windowId && type === "open") {
       await this.actions.openWindow(windowId);
     } else if (windowId && type === "remove") {

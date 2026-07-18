@@ -93,6 +93,15 @@ export class TerminalStatusTracker implements vscode.Disposable {
     });
   }
 
+  public async focusTerminal(terminalId: string): Promise<boolean> {
+    const terminal = [...this.terminals.entries()].find(([, tracked]) => tracked.id === terminalId)?.[0];
+    if (!terminal) {
+      return false;
+    }
+    terminal.show(true);
+    return true;
+  }
+
   private syncTerminals(): readonly vscode.Terminal[] {
     const current = new Set(vscode.window.terminals);
     for (const terminal of current) {

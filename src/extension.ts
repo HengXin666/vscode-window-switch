@@ -35,7 +35,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
   deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
+    checkForUpdates: () => updateManager.checkForUpdates({ manual: true }),
     focusWindow: focusRegisteredWindow,
+    focusTerminal,
     openWindow,
     renameWindow,
     setWindowColor,
@@ -45,6 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   bridgeServer = new BridgeServer(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
+    focusTerminal,
     openWindow,
     renameWindow,
     setWindowColor,
@@ -63,7 +66,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(updateManager);
 
   const syncAutomaticChecks = (): void => {
-    updateManager.setAutomaticChecksEnabled(bridgeServer?.isPrimary === true && getConfigBoolean("autoCheckUpdates"));
+    // Every UI window keeps the timer alive. The updater's shared atomic lock
+    // guarantees that only one window performs the GitHub request per cycle,
+    // so automatic checks continue even if the window that owns the bridge closes.
+    updateManager.setAutomaticChecksEnabled(getConfigBoolean("autoCheckUpdates"));
   };
 
   context.subscriptions.push(
@@ -178,6 +184,17 @@ async function migrateLegacyWorkspaceTitle(): Promise<void> {
 
 async function openPanel(): Promise<void> {
   await deckPanel?.show();
+}
+
+async function focusTerminal(windowId: string, terminalId: string): Promise<void> {
+  if (windowId !== currentWindowId) {
+    await focusRegisteredWindow(windowId);
+    await vscode.commands.executeCommand("workbench.action.terminal.focus");
+    return;
+  }
+  if (!(await terminalStatusTracker?.focusTerminal(terminalId))) {
+    await vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
+  }
 }
 
 async function heartbeat(): Promise<void> {
