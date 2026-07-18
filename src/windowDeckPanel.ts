@@ -208,7 +208,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     .tab.active { border-bottom-color: var(--vscode-focusBorder); color: var(--vscode-tab-activeForeground); background: var(--vscode-tab-activeBackground); }
     .mode-help { margin-left: auto; align-self: center; color: var(--vscode-descriptionForeground); font-size: 11px; }
     #deck:not(.list) { min-height: 0; overflow: hidden; }
-    .merged { --merged-left-width: 240px; --merged-right-width: 280px; display: grid; grid-template-columns: minmax(140px, var(--merged-left-width)) 5px minmax(260px, 1fr) 5px minmax(160px, var(--merged-right-width)); width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+    .merged { --merged-left-width: 240px; --merged-right-width: 280px; display: grid; grid-template-columns: minmax(140px, var(--merged-left-width)) 5px minmax(0, 1fr) 5px minmax(160px, var(--merged-right-width)); width: 100%; max-width: 100%; height: 100%; min-height: 0; overflow: hidden; }
     .merged-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--vscode-sideBar-background); }
     .merged-resizer { position: relative; z-index: 2; width: 5px; min-width: 5px; cursor: col-resize; touch-action: none; background: var(--vscode-widget-border); }
     .merged-resizer::after { content: ""; position: absolute; inset: 0 -2px; background: transparent; }
@@ -228,9 +228,10 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     .terminal-toolbar { display: flex; flex: 0 0 auto; align-items: center; min-height: 35px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-panel-background, var(--vscode-editor-background)); }
     .terminal-toolbar-title { min-width: 0; overflow: hidden; color: var(--vscode-foreground); text-overflow: ellipsis; white-space: nowrap; }
     .terminal-toolbar-state { margin-left: 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
-    .native-terminal { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 8px 12px 10px; color: var(--vscode-terminal-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); line-height: 1.4; }
-    .terminal-viewport { flex: 1; min-height: 0; overflow: hidden; }
-    .terminal-viewport .xterm { height: 100%; padding: 0 4px; }
+    .native-terminal { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 8px 12px 10px; color: var(--vscode-terminal-foreground, var(--vscode-foreground)); background: var(--vscode-terminal-background, var(--vscode-editor-background)); font-family: var(--vscode-terminal-font-family, var(--vscode-editor-font-family, monospace)); font-size: var(--vscode-terminal-font-size, var(--vscode-editor-font-size, 13px)); line-height: 1.2; }
+    .terminal-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
+    .terminal-viewport .xterm { height: 100%; padding: 0 4px; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
+    .terminal-viewport .xterm-screen, .terminal-viewport .xterm-viewport { background: var(--vscode-terminal-background, var(--vscode-editor-background)) !important; }
     .terminal-output { flex: 1; min-height: 0; margin: 0; overflow: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
     .terminal-output-placeholder { color: var(--vscode-descriptionForeground); }
     .terminal-command { padding-bottom: 8px; color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
@@ -243,6 +244,9 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     .merged-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .merged-state { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; white-space: nowrap; }
     .merged-terminal svg { flex: 0 0 16px; width: 16px; height: 16px; color: var(--vscode-icon-foreground); }
+    @media (max-width: 760px) {
+      .merged { grid-template-columns: minmax(120px, var(--merged-left-width)) 5px minmax(0, 1fr) 5px minmax(140px, var(--merged-right-width)); }
+    }
     @media (max-width: 560px) {
       .row { grid-template-columns: 18px 12px minmax(0,1fr) auto; }
       .row > .terminals { grid-column: 3 / span 2; grid-row: 2; justify-content: flex-start; max-width: none; }
@@ -264,6 +268,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     let xtermReady = false;
     const terminalViews = new Map();
     const terminalPending = new Map();
+    const terminalReplayPending = new Set();
     Promise.all([import("${xtermScript}"), import("${fitScript}")]).then(([xtermModule, fitModule]) => {
       Terminal = xtermModule.Terminal;
       FitAddon = fitModule.FitAddon;
@@ -334,12 +339,25 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       const key = terminalKey(windowId, terminalId);
       const view = terminalViews.get(key);
       if (view) {
-        if (replay && view.replayed) return;
-        view.term.write(data);
-        if (replay) view.replayed = true;
+        if (replay) {
+          // A replay is a complete snapshot. Reset first so data received while
+          // the webview was mounting cannot be rendered a second time.
+          view.term.reset();
+          view.term.write(data);
+          view.replayed = true;
+        } else {
+          view.term.write(data);
+        }
         return;
       }
-      terminalPending.set(key, ((terminalPending.get(key) || "") + data).slice(-200_000));
+      if (replay) {
+        terminalPending.set(key, data);
+        terminalReplayPending.add(key);
+      } else {
+        terminalPending.set(key, (terminalPending.get(key) || "") + data);
+      }
+      const pending = terminalPending.get(key) || "";
+      terminalPending.set(key, pending.slice(-200_000));
     }
 
     function mountSelectedTerminal() {
@@ -348,17 +366,18 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       const key = terminalKey(selectedMergedWindowId, selectedMergedTerminalId);
       let view = terminalViews.get(key);
       if (!view) {
-        const term = new Terminal({ convertEol: false, cursorBlink: true, scrollback: 10000, copyOnSelection: false, allowProposedApi: true });
+        const term = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 10000, copyOnSelection: false, allowProposedApi: true, theme: { background: "#00000000" } });
         const fit = new FitAddon();
         term.loadAddon(fit);
         const windowId = selectedMergedWindowId;
         const terminalId = selectedMergedTerminalId;
         term.onData((data) => vscode.postMessage({ type: "terminalInput", windowId, terminalId, text: data, shouldExecute: false }));
         term.open(viewport);
+        viewport.addEventListener("click", () => term.focus());
         view = { term, fit, replayed: false };
         terminalViews.set(key, view);
         const pending = terminalPending.get(key);
-        if (pending) { term.write(pending); terminalPending.delete(key); }
+        if (pending) { term.write(pending); terminalPending.delete(key); terminalReplayPending.delete(key); }
       } else {
         viewport.replaceChildren(view.term.element);
       }
@@ -443,13 +462,13 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
         selectedMergedTerminalId = activeTerminal ? activeTerminal.terminalId : "";
       }
       const selectedTerminal = terminals.find((item) => item.terminalId === selectedMergedTerminalId);
-      const windowItems = windows.map((item) => '<button class="merged-window ' + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>').join("");
+      const windowItems = windows.map((item) => '<button draggable="true" class="merged-window ' + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>').join("");
       const terminalItems = terminals.map((terminal) => '<button class="merged-terminal ' + (terminal.terminalId === selectedMergedTerminalId ? "current" : "") + '" data-merged-terminal="' + esc(terminal.terminalId) + '">' + terminalIcon(terminal.state || "idle") + '<span class="merged-name">' + esc(terminal.name || terminal.shell || "terminal") + '</span><span class="merged-state">' + esc(terminalStateLabel(terminal.state || "idle")) + '</span></button>').join("");
       const toolbarTitle = selectedTerminal ? ((selectedWindow ? selectedWindow.title + " · " : "") + (selectedTerminal.name || "terminal")) : "原生终端";
       const toolbar = '<div class="terminal-toolbar"><span class="terminal-toolbar-title">' + esc(toolbarTitle) + '</span>' +
         (selectedTerminal ? '<span class="terminal-toolbar-state">' + esc(terminalStateLabel(selectedTerminal.state || "idle")) + ' · 同步视图</span>' : '') + '</div>';
       const center = selectedTerminal
-        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport></div></div>'
+        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="合并终端输出"></div><div class="terminal-input-row"><span class="terminal-prompt">›</span><input class="terminal-input" data-terminal-input type="text" spellcheck="false" placeholder="在此输入并按 Enter 发送"><button class="terminal-send" data-send-terminal>发送</button></div></div>'
         : '<div class="terminal-unavailable"><strong>所选窗口没有终端</strong><span>合并终端页只展示终端，不会打开或切换 VS Code 窗口。</span></div>';
       const terminalTitle = '<div class="merged-title"><span>终端</span></div>';
       return '<div class="merged" style="--merged-left-width:' + Math.round(mergedLeftWidth) + 'px;--merged-right-width:' + Math.round(mergedRightWidth) + 'px"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '</div></aside><div class="merged-resizer" data-resize="left" role="separator" tabindex="0" aria-label="调整窗口看板宽度" aria-orientation="vertical"></div><section class="merged-main">' + toolbar + center + '</section><div class="merged-resizer" data-resize="right" role="separator" tabindex="0" aria-label="调整终端看板宽度" aria-orientation="vertical"></div><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
@@ -461,6 +480,31 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
         selectedMergedTerminalId = "";
         render();
       }));
+      scope.querySelectorAll("[data-merged-window]").forEach((item) => {
+        item.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          showWindowMenu(item.dataset.mergedWindow, event.clientX, event.clientY);
+        });
+        item.addEventListener("dragstart", (event) => {
+          dragState = { type: "window", windowId: item.dataset.mergedWindow, original: cloneLayout(layout), committed: false };
+          item.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", item.dataset.mergedWindow);
+        });
+        item.addEventListener("dragover", (event) => {
+          if (!dragState || dragState.windowId === item.dataset.mergedWindow) return;
+          event.preventDefault();
+          item.classList.add("drop-merge");
+        });
+        item.addEventListener("drop", (event) => {
+          if (!dragState || dragState.type !== "window") return;
+          event.preventDefault();
+          mergeWindows(dragState.windowId, item.dataset.mergedWindow);
+          dragState.committed = true;
+          saveLayout();
+        });
+        item.addEventListener("dragend", finishDrag);
+      });
       scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("click", () => {
         selectedMergedTerminalId = item.dataset.mergedTerminal;
         terminalInputDraft = "";
@@ -609,7 +653,7 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
     }
 
     function setMergedWidth(root, side, requestedWidth) {
-      const available = Math.max(0, root.clientWidth - 10 - 260);
+      const available = Math.max(0, root.clientWidth - 10);
       if (side === "left") {
         const max = Math.max(140, available - Math.max(160, mergedRightWidth));
         mergedLeftWidth = Math.min(max, Math.max(140, requestedWidth));

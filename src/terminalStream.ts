@@ -168,7 +168,16 @@ export class TerminalStreamHub {
   private remember(windowId: string, terminalId: string, data: string): void {
     const key = `${windowId}:${terminalId}`;
     const current = this.replay.get(key) ?? "";
-    this.replay.set(key, (current + data).slice(-200_000));
+    const combined = current + data;
+    if (combined.length <= 200_000) {
+      this.replay.set(key, combined);
+      return;
+    }
+    // Never begin a replay in the middle of a line/ANSI sequence. Doing so
+    // makes xterm interpret a stale cursor movement as visible garbage.
+    const tail = combined.slice(-200_000);
+    const newline = tail.indexOf("\n");
+    this.replay.set(key, newline >= 0 ? tail.slice(newline + 1) : tail);
   }
 }
 
