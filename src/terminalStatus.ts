@@ -83,6 +83,7 @@ export class TerminalStatusTracker implements vscode.Disposable {
         terminalId: tracked.id,
         name: terminal.name,
         order: index,
+        active: terminal === vscode.window.activeTerminal,
         state: this.stateFor(tracked, seenAt),
         commandLine: tracked.commandLine ?? tracked.fallbackCommandLine,
         outputTail: tracked.outputTail || undefined,

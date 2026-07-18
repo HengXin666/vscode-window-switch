@@ -133,6 +133,7 @@ function renderShell(): string {
     :root { color-scheme: light dark; --radius: 6px; --indent: 28px; }
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     .surface { width: min(760px, calc(100vw - 24px)); margin: 12px auto; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 8px 28px rgba(0,0,0,.28); overflow: hidden; }
+    .surface.merged-mode { width: min(1180px, calc(100vw - 24px)); }
     .head { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); font-weight: 600; }
     .head small { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .head button { margin-left: 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 7px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; font-size: 11px; }
@@ -153,21 +154,12 @@ function renderShell(): string {
     .title { display: flex; align-items: center; gap: 6px; }
     .meta { min-width: 0; max-width: min(220px, 32%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .terminals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 300px; }
-    .terminal { --terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: pointer; }
+    .terminal { --terminal-color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--terminal-color), transparent 58%); border-radius: 4px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--terminal-color), transparent 88%); font: inherit; font-size: 10px; line-height: 18px; cursor: default; }
     .terminal.running { --terminal-color: #3794ff; }
     .terminal.waitingInput { --terminal-color: #d29922; }
     .terminal.idle { --terminal-color: var(--vscode-descriptionForeground); opacity: .78; }
     .terminal svg { flex: 0 0 12px; width: 12px; height: 12px; color: var(--terminal-color); }
     .terminal-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .terminal-detail { margin: 0 12px 12px; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-textCodeBlock-background); overflow: hidden; }
-    .terminal-detail[hidden] { display: none; }
-    .terminal-detail-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); }
-    .terminal-detail-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-    .terminal-detail-state { color: var(--vscode-descriptionForeground); font-size: 11px; }
-    .terminal-detail-actions { display: flex; gap: 6px; margin-left: auto; }
-    .terminal-detail button { border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 8px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; }
-    .terminal-detail-command { margin: 0; padding: 10px; border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-terminal-ansiGreen); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-    .terminal-detail-output { max-height: min(300px, 38vh); margin: 0; padding: 10px; overflow: auto; color: var(--vscode-terminal-foreground); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .icon { width: 22px; height: 22px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; line-height: 20px; }
     .icon:hover { background: var(--vscode-toolbar-hoverBackground); }
     .group { margin: 2px 0 4px; }
@@ -181,6 +173,24 @@ function renderShell(): string {
     .palette { display: grid; grid-template-columns: repeat(8, 18px); gap: 5px; padding: 6px 4px 3px; }
     .swatch { width: 18px !important; min-height: 18px !important; padding: 0 !important; border: 1px solid var(--vscode-contrastBorder) !important; border-radius: 3px !important; background: var(--swatch) !important; }
     .empty { padding: 14px; color: var(--vscode-descriptionForeground); }
+    .tabs { display: flex; align-items: end; min-height: 35px; padding: 0 8px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-editorGroupHeader-tabsBackground); }
+    .tab { align-self: stretch; min-width: 100px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; color: var(--vscode-tab-inactiveForeground); background: transparent; cursor: pointer; font: inherit; }
+    .tab.active { border-bottom-color: var(--vscode-focusBorder); color: var(--vscode-tab-activeForeground); background: var(--vscode-tab-activeBackground); }
+    .mode-help { margin-left: auto; align-self: center; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .merged { display: grid; grid-template-columns: minmax(170px, 24%) minmax(280px, 1fr) minmax(190px, 27%); min-height: min(620px, calc(100vh - 96px)); }
+    .merged-column { min-width: 0; border-right: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); }
+    .merged-column:last-child { border-right: 0; border-left: 1px solid var(--vscode-widget-border); }
+    .merged-title { padding: 9px 10px; border-bottom: 1px solid var(--vscode-widget-border); color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .merged-window, .merged-terminal { display: flex; align-items: center; gap: 7px; width: calc(100% - 8px); min-height: 36px; margin: 4px; padding: 5px 8px; box-sizing: border-box; border: 1px solid transparent; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; text-align: left; font: inherit; }
+    .merged-window:hover, .merged-terminal:hover { background: var(--vscode-list-hoverBackground); }
+    .merged-window.current, .merged-terminal.current { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .merged-window.stale { opacity: .58; }
+    .merged-main { display: flex; flex-direction: column; min-width: 0; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
+    .native-terminal { display: grid; flex: 1; place-content: center; gap: 12px; padding: 28px; color: var(--vscode-descriptionForeground); text-align: center; }
+    .native-terminal strong { color: var(--vscode-foreground); font-size: 14px; }
+    .native-terminal button { justify-self: center; padding: 6px 12px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; }
+    .merged-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .merged-state { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 10px; white-space: nowrap; }
     @media (max-width: 560px) {
       .row { grid-template-columns: 18px 12px minmax(0,1fr) auto; }
       .row > .terminals { grid-column: 3 / span 2; grid-row: 2; justify-content: flex-start; max-width: none; }
@@ -190,24 +200,33 @@ function renderShell(): string {
 </head>
 <body>
   <main class="surface">
-    <div class="head">Window Deck <small>点击命令查看内容</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
+    <div class="head">Window Deck <small>窗口与原生终端导航</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
+    <nav class="tabs"><button class="tab active" data-tab="quick">快速切换</button><button class="tab" data-tab="merged">合并终端</button><span class="mode-help" id="mode-help">终端仅显示状态，不可预览或操作</span></nav>
     <div class="list" id="deck"></div>
   </main>
-  <section class="terminal-detail" id="terminal-detail" hidden></section>
   <div class="menu" id="menu"></div>
   <script>
     const vscode = acquireVsCodeApi();
     const COLORS = ["#4f8cff", "#2fb344", "#f59f00", "#e03131", "#9c36b5", "#0ca678", "#f76707", "#495057"];
     const deck = document.getElementById("deck");
     const menu = document.getElementById("menu");
-    const terminalDetail = document.getElementById("terminal-detail");
+    const modeHelp = document.getElementById("mode-help");
     document.getElementById("check-updates").addEventListener("click", () => vscode.postMessage({ type: "checkForUpdates" }));
     let windows = [];
     let layout = { order: [], groups: [] };
     let currentWindowId = "";
     let dragState = null;
     let editing = false;
-    let selectedTerminal = null;
+    let activeTab = "quick";
+    let selectedMergedWindowId = "";
+    let selectedMergedTerminalId = "";
+    document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
+      activeTab = tab.dataset.tab;
+      document.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item === tab));
+      modeHelp.textContent = activeTab === "quick" ? "终端仅显示状态，不可预览或操作" : "终端交互使用 VS Code 原生终端";
+      document.querySelector(".surface").classList.toggle("merged-mode", activeTab === "merged");
+      render();
+    }));
 
     window.addEventListener("message", (event) => {
       if (event.data.type !== "windows") return;
@@ -221,9 +240,9 @@ function renderShell(): string {
     function render() {
       renderWithFlip(() => {
         layout = normalizeLayout(layout);
-        deck.innerHTML = renderSection(false) + renderSection(true) || '<div class="empty">没有已注册的工作区窗口。</div>';
+        deck.classList.toggle("list", activeTab === "quick");
+        deck.innerHTML = activeTab === "quick" ? (renderSection(false) + renderSection(true) || '<div class="empty">没有已注册的工作区窗口。</div>') : renderMergedTerminal();
         bind(deck);
-        renderTerminalDetail();
       });
     }
 
@@ -276,8 +295,8 @@ function renderShell(): string {
       return '<span class="terminals">' + items.map((terminal, index) => {
         const state = terminal.state || "idle";
         const label = terminalLabel(terminal);
-        return '<button class="terminal ' + esc(state) + '" data-terminal-id="' + esc(terminal.terminalId) + '" title="' + esc((index + 1) + ". " + terminalStateLabel(state) + " " + label) + '">' +
-          terminalIcon(state) + '<span class="terminal-label">' + esc(label) + '</span></button>';
+        return '<span class="terminal ' + esc(state) + '" title="' + esc((index + 1) + ". " + terminalStateLabel(state) + " " + label) + '">' +
+          terminalIcon(state) + '<span class="terminal-label">' + esc(label) + '</span></span>';
       }).join("") + '</span>';
     }
 
@@ -295,46 +314,40 @@ function renderShell(): string {
       return '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M2.75 4.25h10.5v7.5H2.75zM5 6.5 7 8l-2 1.5M8.25 9.5h2.5"/></svg>';
     }
 
-    function findTerminal(windowId, terminalId) {
-      const item = findWindow(windowId);
-      const terminal = (item && item.terminals || []).find((candidate) => candidate.terminalId === terminalId);
-      return item && terminal ? { item, terminal } : null;
-    }
-
-    function renderTerminalDetail() {
-      const selected = selectedTerminal && findTerminal(selectedTerminal.windowId, selectedTerminal.terminalId);
-      if (!selected) {
-        selectedTerminal = null;
-        terminalDetail.hidden = true;
-        terminalDetail.innerHTML = "";
-        return;
+    function renderMergedTerminal() {
+      const opened = windows.filter((item) => !item.stale);
+      const selectedWindow = findWindow(selectedMergedWindowId) || findWindow(currentWindowId) || opened[0];
+      selectedMergedWindowId = selectedWindow ? selectedWindow.windowId : "";
+      const terminals = selectedWindow ? (selectedWindow.terminals || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0)) : [];
+      if (!terminals.some((item) => item.terminalId === selectedMergedTerminalId)) {
+        const activeTerminal = terminals.find((item) => item.active) || terminals[0];
+        selectedMergedTerminalId = activeTerminal ? activeTerminal.terminalId : "";
       }
-      const command = selected.terminal.commandLine || "（当前没有可识别的命令）";
-      const output = selected.terminal.outputTail || "（尚未捕获到输出；VS Code 扩展 API 无法读取打开扩展之前的终端历史。）";
-      terminalDetail.hidden = false;
-      terminalDetail.innerHTML = '<div class="terminal-detail-head"><span class="terminal-detail-title">' + esc(selected.item.title + " · " + (selected.terminal.name || "terminal")) + '</span>' +
-        '<span class="terminal-detail-state">' + esc(terminalStateLabel(selected.terminal.state || "idle")) + '</span>' +
-        '<span class="terminal-detail-actions"><button data-open-selected>转到终端</button><button data-close-terminal-detail>关闭</button></span></div>' +
-        '<pre class="terminal-detail-command">' + esc(command) + '</pre><pre class="terminal-detail-output">' + esc(output) + '</pre>';
-      terminalDetail.querySelector("[data-open-selected]").addEventListener("click", () => {
-        vscode.postMessage({ type: "terminal", windowId: selectedTerminal.windowId, terminalId: selectedTerminal.terminalId });
-      });
-      terminalDetail.querySelector("[data-close-terminal-detail]").addEventListener("click", () => {
-        selectedTerminal = null;
-        renderTerminalDetail();
-      });
+      const selectedTerminal = terminals.find((item) => item.terminalId === selectedMergedTerminalId);
+      const windowItems = windows.map((item) => '<button class="merged-window ' + (item.windowId === selectedMergedWindowId ? "current " : "") + (item.stale ? "stale" : "") + '" data-merged-window="' + esc(item.windowId) + '"><span class="box" style="--item-color:' + esc(item.color) + '"></span><span class="merged-name">' + esc(item.title) + '</span></button>').join("");
+      const terminalItems = terminals.map((terminal) => '<button class="merged-terminal ' + (terminal.terminalId === selectedMergedTerminalId ? "current" : "") + '" data-merged-terminal="' + esc(terminal.terminalId) + '">' + terminalIcon(terminal.state || "idle") + '<span class="merged-name">' + esc(terminal.name || terminal.shell || "terminal") + '</span><span class="merged-state">' + esc(terminalStateLabel(terminal.state || "idle")) + '</span></button>').join("");
+      const center = selectedTerminal
+        ? '<div class="native-terminal"><strong>' + esc((selectedWindow ? selectedWindow.title + " · " : "") + (selectedTerminal.name || "terminal")) + '</strong><span>这里使用 VS Code 原生终端，不复制输出，也不模拟输入。</span><button data-open-native-terminal>打开并操作原生终端</button></div>'
+        : '<div class="native-terminal"><strong>当前窗口没有已打开的终端</strong><span>请先在该窗口创建终端。</span></div>';
+      return '<div class="merged"><aside class="merged-column"><div class="merged-title">窗口</div>' + (windowItems || '<div class="empty">没有窗口</div>') + '</aside><section class="merged-main"><div class="merged-title">原生终端</div>' + center + '</section><aside class="merged-column"><div class="merged-title">当前窗口的终端</div>' + (terminalItems || '<div class="empty">没有终端</div>') + '</aside></div>';
     }
 
     function bind(scope) {
-      scope.querySelectorAll("[data-terminal-id]").forEach((terminal) => terminal.addEventListener("click", (event) => {
-        event.stopPropagation();
-        const row = terminal.closest("[data-window-id]");
-        if (row) {
-          selectedTerminal = { windowId: row.dataset.windowId, terminalId: terminal.dataset.terminalId };
-          renderTerminalDetail();
-          terminalDetail.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        }
+      scope.querySelectorAll("[data-merged-window]").forEach((item) => item.addEventListener("click", () => {
+        selectedMergedWindowId = item.dataset.mergedWindow;
+        selectedMergedTerminalId = "";
+        const target = findWindow(selectedMergedWindowId);
+        vscode.postMessage({ type: target && target.stale ? "open" : "focus", windowId: selectedMergedWindowId });
+        render();
       }));
+      scope.querySelectorAll("[data-merged-terminal]").forEach((item) => item.addEventListener("click", () => {
+        selectedMergedTerminalId = item.dataset.mergedTerminal;
+        vscode.postMessage({ type: "terminal", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId });
+        render();
+      }));
+      scope.querySelector("[data-open-native-terminal]")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "terminal", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId });
+      });
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("button") || event.target.closest("input")) return;

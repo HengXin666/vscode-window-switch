@@ -9,6 +9,7 @@ export type WindowTerminalRecord = {
   terminalId: string;
   name: string;
   order: number;
+  active?: boolean;
   state: TerminalActivityState;
   commandLine?: string;
   outputTail?: string;
