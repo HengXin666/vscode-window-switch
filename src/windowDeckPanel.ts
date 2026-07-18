@@ -366,7 +366,11 @@ function renderShell(webview: vscode.Webview, extensionRoot?: vscode.Uri): strin
       const key = terminalKey(selectedMergedWindowId, selectedMergedTerminalId);
       let view = terminalViews.get(key);
       if (!view) {
-        const term = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 10000, copyOnSelection: false, allowProposedApi: true, theme: { background: "#00000000" } });
+        const terminalStyle = getComputedStyle(document.body);
+        const terminalFontFamily = terminalStyle.getPropertyValue("--vscode-terminal-font-family").trim() || terminalStyle.getPropertyValue("--vscode-editor-font-family").trim() || "monospace";
+        const terminalFontSize = Number.parseFloat(terminalStyle.getPropertyValue("--vscode-terminal-font-size")) || Number.parseFloat(terminalStyle.getPropertyValue("--vscode-editor-font-size")) || 13;
+        const terminalFontWeight = terminalStyle.getPropertyValue("--vscode-terminal-font-weight").trim() || "normal";
+        const term = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 10000, copyOnSelection: false, allowProposedApi: true, fontFamily: terminalFontFamily, fontSize: terminalFontSize, fontWeight: terminalFontWeight, theme: { background: "#00000000" } });
         const fit = new FitAddon();
         term.loadAddon(fit);
         const windowId = selectedMergedWindowId;
