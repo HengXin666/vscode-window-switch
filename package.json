@@ -39,16 +39,19 @@
   "extensionKind": [
     "ui"
   ],
+  "enabledApiProposals": [
+    "terminalDataWriteEvent"
+  ],
   "contributes": {
     "commands": [
       {
         "command": "windowDeck.installWorkbenchPatch",
-        "title": "Window Deck: 安装顶部栏补丁",
+        "title": "Window Deck: 安装原生终端同步权限",
         "category": "Window Deck"
       },
       {
         "command": "windowDeck.uninstallWorkbenchPatch",
-        "title": "Window Deck: 卸载顶部栏补丁",
+        "title": "Window Deck: 移除原生终端同步权限",
         "category": "Window Deck"
       },
       {
@@ -172,7 +175,7 @@
     }
   },
   "scripts": {
-    "compile": "rm -rf dist && tsc -p ./ && mkdir -p dist/vendor && cp ../vscode-extension-github-updater/dist/index.js dist/vendor/githubUpdater.js",
+    "compile": "rm -rf dist && tsc -p ./ && mkdir -p dist/vendor dist/webview && cp ../vscode-extension-github-updater/dist/index.js dist/vendor/githubUpdater.js && cp node_modules/@xterm/xterm/lib/xterm.mjs dist/webview/xterm.mjs && cp node_modules/@xterm/addon-fit/lib/addon-fit.mjs dist/webview/addon-fit.mjs && cp node_modules/@xterm/xterm/css/xterm.css dist/webview/xterm.css",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "vscode:prepublish": "npm run compile",
@@ -182,10 +185,16 @@
   "devDependencies": {
     "@types/node": "^20.14.8",
     "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^7.13.1",
     "@typescript-eslint/parser": "^7.13.1",
     "eslint": "^8.57.0",
     "typescript": "^5.4.5",
     "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "ws": "^8.21.1"
   }
 }

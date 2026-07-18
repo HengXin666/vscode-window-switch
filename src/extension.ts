@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as childProcess from "node:child_process";
 
 import { GitHubVsixUpdateManager } from "./vendor/githubUpdater";
 import { BridgeServer } from "./bridgeServer";
@@ -10,6 +11,7 @@ import { applyStaleState, buildWindowRecord } from "./windowMetadata";
 import { compactPath, getConfigBoolean, getConfigNumber, randomId, registryDirectory, relativeAge, titleFromRecord } from "./util";
 import { normalizeVisibleLayout, orderVisibleRecords, visibleWindowRecords } from "./windowView";
 import { WindowDeckPanel } from "./windowDeckPanel";
+import { TerminalStreamHub } from "./terminalStream";
 
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -19,6 +21,7 @@ let currentTitleToken: string;
 let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let terminalStatusTracker: TerminalStatusTracker | undefined;
+let terminalStreamHub: TerminalStreamHub | undefined;
 let updateManager: GitHubVsixUpdateManager;
 let extensionPath: string;
 
@@ -29,12 +32,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   currentTitleToken = `WD:${randomId(5)}`;
 
   await migrateLegacyWorkspaceTitle();
-  terminalStatusTracker = new TerminalStatusTracker();
+  terminalStreamHub = new TerminalStreamHub(currentWindowId, {
+    onData: (windowId, terminalId, data) => deckPanel?.pushTerminalData(windowId, terminalId, data),
+    onInput: (terminalId, data) => {
+      if (!terminalStatusTracker?.sendText(terminalId, data, false)) {
+        void vscode.window.showInformationMessage("这个命令行窗口已经关闭或正在刷新，请稍后再试。");
+      }
+    }
+  });
+  await terminalStreamHub.start();
+  context.subscriptions.push(terminalStreamHub);
+  terminalStatusTracker = new TerminalStatusTracker((terminalId, data) => terminalStreamHub?.publishData(terminalId, data));
   context.subscriptions.push(terminalStatusTracker);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.command = "windowDeck.openPanel";
+  statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
-  deckPanel = new WindowDeckPanel(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
+  deckPanel = new WindowDeckPanel(context.extensionUri, registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     checkForUpdates: () => updateManager.checkForUpdates({ manual: true }),
     focusWindow: focusRegisteredWindow,
     focusTerminal,
@@ -44,7 +57,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setWindowColor,
     removeWindow,
     saveLayout: (layout) => registry.saveLayout(layout),
-    refreshCurrentWindow: heartbeat
+    refreshCurrentWindow: heartbeat,
+    getTerminalReplay: (windowId, terminalId) => terminalStreamHub?.getReplay(windowId, terminalId) ?? ""
   });
   bridgeServer = new BridgeServer(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
@@ -101,25 +115,63 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 async function installWorkbenchPatch(): Promise<void> {
-  await vscode.window.showInformationMessage(
-    "Window Deck 已改为外部悬浮窗口，不再需要安装顶部栏补丁。旧补丁可用卸载命令移除。",
-    "复制卸载命令"
-  ).then(async (picked) => {
-    if (picked === "复制卸载命令") {
-      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/uninstall-workbench-patch.sh`)}`);
-    }
-  });
+  const script = patchScriptPath("install");
+  try {
+    await runElevatedScript(script);
+    const picked = await vscode.window.showInformationMessage("Window Deck 已获得原始终端数据权限。请完全退出并重新打开 VS Code，之后正常启动即可。", "退出 VS Code");
+    if (picked === "退出 VS Code") await vscode.commands.executeCommand("workbench.action.quit");
+  } catch (error) {
+    await vscode.window.showErrorMessage(`安装 Window Deck 终端权限失败：${(error as Error).message}`, "复制命令").then(async (picked) => {
+      if (picked === "复制命令") await vscode.env.clipboard.writeText(elevatedScriptCommand(script));
+    });
+  }
 }
 
 async function uninstallWorkbenchPatch(): Promise<void> {
-  await vscode.window.showInformationMessage(
-    "卸载 Window Deck 顶部栏补丁需要修改 VS Code 安装目录。请在终端运行 scripts/uninstall-workbench-patch.sh，然后重启 VS Code。",
-    "复制命令"
-  ).then(async (picked) => {
-    if (picked === "复制命令") {
-      await vscode.env.clipboard.writeText(`sudo bash ${shellQuote(`${extensionPath}/scripts/uninstall-workbench-patch.sh`)}`);
-    }
+  const script = patchScriptPath("uninstall");
+  try {
+    await runElevatedScript(script);
+    const picked = await vscode.window.showInformationMessage("Window Deck 终端权限已移除。请完全退出并重新打开 VS Code。", "退出 VS Code");
+    if (picked === "退出 VS Code") await vscode.commands.executeCommand("workbench.action.quit");
+  } catch (error) {
+    await vscode.window.showErrorMessage(`卸载 Window Deck 终端权限失败：${(error as Error).message}`, "复制命令").then(async (picked) => {
+      if (picked === "复制命令") await vscode.env.clipboard.writeText(elevatedScriptCommand(script));
+    });
+  }
+}
+
+function runElevatedScript(script: string): Promise<void> {
+  if (process.platform === "win32") {
+    return runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]);
+  }
+  if (process.platform === "darwin") {
+    const escaped = script.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return runProcess("osascript", ["-e", `do shell script "bash " & quoted form of "${escaped}" with administrator privileges`]);
+  }
+  return runProcess("pkexec", ["bash", script]);
+}
+
+function runProcess(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    childProcess.execFile(command, args, { timeout: 30_000 }, (error, _stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr.trim() || error.message));
+        return;
+      }
+      resolve();
+    });
   });
+}
+
+function patchScriptPath(action: "install" | "uninstall"): string {
+  const extension = process.platform === "win32" ? ".ps1" : ".sh";
+  return `${extensionPath}/scripts/${action}-workbench-patch${extension}`;
+}
+
+function elevatedScriptCommand(script: string): string {
+  if (process.platform === "win32") return `powershell -ExecutionPolicy Bypass -File "${script}"`;
+  if (process.platform === "darwin") return `osascript -e 'do shell script "bash " & quoted form of "${script.replace(/'/g, "'\\''")}" with administrator privileges'`;
+  return `sudo bash ${shellQuote(script)}`;
 }
 
 export async function deactivate(): Promise<void> {
@@ -184,6 +236,11 @@ async function migrateLegacyWorkspaceTitle(): Promise<void> {
 }
 
 async function openPanel(): Promise<void> {
+  if (terminalStreamHub?.isPrimary && terminalStatusTracker && !terminalStatusTracker.supportsLiveData) {
+    await vscode.window.showWarningMessage(
+      "Window Deck 未获得 VS Code 原始终端数据权限；合并终端不会实时同步。请运行“Window Deck: 安装原生终端同步权限”，然后完全重启 VS Code。"
+    );
+  }
   await deckPanel?.show();
 }
 
@@ -200,7 +257,7 @@ async function focusTerminal(windowId: string, terminalId: string): Promise<void
 
 async function sendTerminalText(windowId: string, terminalId: string, text: string, shouldExecute: boolean): Promise<void> {
   if (windowId !== currentWindowId) {
-    await vscode.window.showInformationMessage("请先切换到终端所在的 VS Code 窗口，再发送输入。");
+    terminalStreamHub?.sendInput(windowId, terminalId, text);
     return;
   }
   if (!terminalStatusTracker?.sendText(terminalId, text, shouldExecute)) {
@@ -277,7 +334,7 @@ async function showWindows(): Promise<void> {
 
 async function activateQuickPickWindow(record: WindowRecord): Promise<void> {
   if (record.windowId === currentWindowId) {
-    await configureCurrentWindow();
+    return;
   } else if (record.state.stale) {
     await openWindow(record.windowId);
   } else {

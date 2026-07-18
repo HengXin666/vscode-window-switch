@@ -37,13 +37,37 @@ type TrackedTerminal = {
   lastSampledCpuSeconds?: number;
 };
 
+type TerminalDataWriteEvent = {
+  terminal: vscode.Terminal;
+  data: string;
+};
+
+type TerminalDataWriteWindow = typeof vscode.window & {
+  onDidWriteTerminalData?: vscode.Event<TerminalDataWriteEvent>;
+};
+
+function subscribeToTerminalData(listener: (event: TerminalDataWriteEvent) => void): { disposable: vscode.Disposable; available: boolean } {
+  try {
+    const event = (vscode.window as TerminalDataWriteWindow).onDidWriteTerminalData;
+    return event ? { disposable: event(listener), available: true } : { disposable: { dispose: () => undefined }, available: false };
+  } catch {
+    return { disposable: { dispose: () => undefined }, available: false };
+  }
+}
+
 export class TerminalStatusTracker implements vscode.Disposable {
   private readonly terminals = new Map<vscode.Terminal, TrackedTerminal>();
   private readonly disposables: vscode.Disposable[] = [];
   private nextId = 1;
+  public readonly supportsLiveData: boolean;
 
-  public constructor() {
+  public constructor(private readonly onTerminalData?: (terminalId: string, data: string) => void) {
     this.syncTerminals();
+    const terminalDataSubscription = subscribeToTerminalData((event) => {
+      const tracked = this.ensureTerminal(event.terminal);
+      this.onTerminalData?.(tracked.id, event.data);
+    });
+    this.supportsLiveData = terminalDataSubscription.available;
     this.disposables.push(
       vscode.window.onDidOpenTerminal((terminal) => {
         this.ensureTerminal(terminal);
@@ -59,7 +83,8 @@ export class TerminalStatusTracker implements vscode.Disposable {
       }),
       vscode.window.onDidEndTerminalShellExecution((event) => {
         this.endExecution(event.terminal, event.execution);
-      })
+      }),
+      terminalDataSubscription.disposable
     );
   }
 
