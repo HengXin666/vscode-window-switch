@@ -117,6 +117,10 @@ export class WindowDeckPanel {
       await this.actions.saveLayout(message.layout);
     } else if (message.type === "checkForUpdates") {
       await this.actions.checkForUpdates();
+    } else if (message.windowId && message.terminalId && message.type === "requestTerminalReplay") {
+      const data = this.actions.getTerminalReplay(message.windowId, message.terminalId);
+      await this.panel?.webview.postMessage({ type: "terminalReplay", windowId: message.windowId, terminalId: message.terminalId, data });
+      return;
     } else if (message.windowId && message.type === "focus") {
       await this.actions.focusWindow(message.windowId);
     } else if (message.windowId && message.type === "open") {
@@ -241,7 +245,8 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     .terminal-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm { height: 100%; padding: 0 4px; background: var(--vscode-terminal-background, var(--vscode-editor-background)); }
     .terminal-viewport .xterm-screen, .terminal-viewport .xterm-viewport { background: var(--vscode-terminal-background, var(--vscode-editor-background)) !important; }
-    .xterm .xterm-helper-textarea, .terminal-viewport textarea.xterm-helper-textarea { opacity: 0 !important; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: transparent !important; background: transparent !important; left: -10000px !important; top: 0 !important; width: 1px !important; height: 1px !important; font-size: 1px !important; line-height: 1px !important; resize: none !important; }
+    .xterm .xterm-helper-textarea, .terminal-viewport textarea.xterm-helper-textarea { position: fixed !important; opacity: 0 !important; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: transparent !important; background: transparent !important; clip-path: inset(100%) !important; left: -10000px !important; top: -10000px !important; width: 1px !important; height: 1px !important; font-size: 1px !important; line-height: 1px !important; resize: none !important; }
+    .terminal-viewport .xterm-helper-textarea::selection { background: transparent !important; color: transparent !important; }
     .terminal-output { flex: 1; min-height: 0; margin: 0; overflow: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
     .terminal-output-placeholder { color: var(--vscode-descriptionForeground); }
     .terminal-command { padding-bottom: 8px; color: var(--vscode-terminal-ansiGreen, var(--vscode-foreground)); }
@@ -278,7 +283,9 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     let xtermReady = false;
     const terminalViews = new Map();
     const terminalPending = new Map();
-    const terminalReplayPending = new Set();
+    const terminalReplayRequested = new Set();
+    const terminalReplayed = new Set();
+    const terminalLiveAfterRequest = new Map();
     const terminalOptions = ${JSON.stringify(terminalStyle)};
     Promise.all([import("${xtermScript}"), import("${fitScript}")]).then(([xtermModule, fitModule]) => {
       Terminal = xtermModule.Terminal;
@@ -322,6 +329,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
       }
       if (event.data.type !== "windows") return;
       windows = event.data.windows || [];
+      reconcileTerminalCaches();
       layout = normalizeLayout(event.data.layout || { order: [], groups: [] });
       currentWindowId = event.data.currentWindowId || "";
       if (!editing) render();
@@ -353,19 +361,22 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
       const view = terminalViews.get(key);
       if (view) {
         if (replay) {
-          // A replay is a complete snapshot. Reset first so data received while
-          // the webview was mounting cannot be rendered a second time.
+          const live = terminalLiveAfterRequest.get(key) || "";
           view.term.reset();
-          view.term.write(data);
-          view.replayed = true;
+          view.term.write(data, () => { if (live) view.term.write(live); });
+          terminalReplayRequested.delete(key);
+          terminalReplayed.add(key);
+          terminalLiveAfterRequest.delete(key);
         } else {
-          view.term.write(data);
+          if (terminalReplayRequested.has(key)) terminalLiveAfterRequest.set(key, (terminalLiveAfterRequest.get(key) || "") + data);
+          else view.term.write(data);
         }
         return;
       }
       if (replay) {
         terminalPending.set(key, data);
-        terminalReplayPending.add(key);
+        terminalReplayRequested.delete(key);
+        terminalReplayed.add(key);
       } else {
         terminalPending.set(key, (terminalPending.get(key) || "") + data);
       }
@@ -392,16 +403,46 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
         term.onData((data) => vscode.postMessage({ type: "terminalInput", windowId, terminalId, text: data, shouldExecute: false }));
         term.open(viewport);
         viewport.addEventListener("click", () => term.focus());
-        view = { term, fit, replayed: false };
+        const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+          try { fit.fit(); } catch {}
+        }) : undefined;
+        resizeObserver?.observe(viewport);
+        view = { term, fit, resizeObserver };
         terminalViews.set(key, view);
-        const pending = terminalPending.get(key);
-        if (pending) { term.write(pending); terminalPending.delete(key); terminalReplayPending.delete(key); }
       } else {
         viewport.replaceChildren(view.term.element);
+        view.resizeObserver?.observe(viewport);
       }
       view.fit.fit();
+      const pending = terminalPending.get(key);
+      if (pending) { view.term.reset(); view.term.write(pending); terminalPending.delete(key); }
+      if (!terminalReplayRequested.has(key) && !terminalReplayed.has(key)) {
+        terminalReplayRequested.add(key);
+        terminalLiveAfterRequest.delete(key);
+        terminalPending.delete(key);
+        vscode.postMessage({ type: "requestTerminalReplay", windowId: selectedMergedWindowId, terminalId: selectedMergedTerminalId });
+      }
       if (preserveFocus || preserveTerminalFocus) view.term.focus();
     }
+
+    function reconcileTerminalCaches() {
+      const known = new Set(windows.flatMap((item) => (item.terminals || []).map((terminal) => terminalKey(item.windowId, terminal.terminalId))));
+      for (const [key, view] of terminalViews) {
+        if (!known.has(key)) { view.resizeObserver?.disconnect(); view.term.dispose(); terminalViews.delete(key); }
+      }
+      for (const key of terminalPending.keys()) if (!known.has(key)) terminalPending.delete(key);
+      for (const key of terminalReplayRequested) if (!known.has(key)) terminalReplayRequested.delete(key);
+      for (const key of terminalReplayed) if (!known.has(key)) terminalReplayed.delete(key);
+      for (const key of terminalLiveAfterRequest.keys()) if (!known.has(key)) terminalLiveAfterRequest.delete(key);
+    }
+
+    function fitMountedTerminal() {
+      const key = terminalKey(selectedMergedWindowId, selectedMergedTerminalId);
+      const view = terminalViews.get(key);
+      if (!view || !deck.querySelector("[data-terminal-viewport]")) return;
+      requestAnimationFrame(() => { try { view.fit.fit(); } catch {} });
+    }
+    window.addEventListener("resize", fitMountedTerminal);
 
     function renderSection(stale) {
       const entries = buildEntries(stale);
@@ -725,6 +766,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
       }
       root.style.setProperty("--merged-left-width", Math.round(mergedLeftWidth) + "px");
       root.style.setProperty("--merged-right-width", Math.round(mergedRightWidth) + "px");
+      fitMountedTerminal();
     }
 
     function constrainMergedWidths(root) {

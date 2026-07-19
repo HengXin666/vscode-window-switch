@@ -61,7 +61,10 @@ export class TerminalStatusTracker implements vscode.Disposable {
   private nextId = 1;
   public readonly supportsLiveData: boolean;
 
-  public constructor(private readonly onTerminalData?: (terminalId: string, data: string) => void) {
+  public constructor(
+    private readonly onTerminalData?: (terminalId: string, data: string) => void,
+    private readonly onTerminalListChanged?: () => void
+  ) {
     this.syncTerminals();
     const terminalDataSubscription = subscribeToTerminalData((event) => {
       const tracked = this.ensureTerminal(event.terminal);
@@ -71,9 +74,11 @@ export class TerminalStatusTracker implements vscode.Disposable {
     this.disposables.push(
       vscode.window.onDidOpenTerminal((terminal) => {
         this.ensureTerminal(terminal);
+        this.onTerminalListChanged?.();
       }),
       vscode.window.onDidCloseTerminal((terminal) => {
         this.terminals.delete(terminal);
+        this.onTerminalListChanged?.();
       }),
       vscode.window.onDidChangeTerminalState((terminal) => {
         this.ensureTerminal(terminal);

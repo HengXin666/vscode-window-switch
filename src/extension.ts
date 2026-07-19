@@ -24,6 +24,7 @@ let deckPanel: WindowDeckPanel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let terminalStatusTracker: TerminalStatusTracker | undefined;
 let terminalStreamHub: TerminalStreamHub | undefined;
+let terminalRefreshTimer: NodeJS.Timeout | undefined;
 let updateManager: GitHubVsixUpdateManager;
 let extensionPath: string;
 
@@ -50,7 +51,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   await terminalStreamHub.start();
   context.subscriptions.push(terminalStreamHub);
-  terminalStatusTracker = new TerminalStatusTracker((terminalId, data) => terminalStreamHub?.publishData(terminalId, data));
+  terminalStatusTracker = new TerminalStatusTracker(
+    (terminalId, data) => terminalStreamHub?.publishData(terminalId, data),
+    scheduleTerminalRefresh
+  );
   context.subscriptions.push(terminalStatusTracker);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = "windowDeck.showWindows";
@@ -198,6 +202,7 @@ function elevatedScriptCommand(script: string): string {
 }
 
 export async function deactivate(): Promise<void> {
+  if (terminalRefreshTimer) clearTimeout(terminalRefreshTimer);
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
@@ -216,6 +221,14 @@ export async function deactivate(): Promise<void> {
       });
     }
   }
+}
+
+function scheduleTerminalRefresh(): void {
+  if (terminalRefreshTimer) clearTimeout(terminalRefreshTimer);
+  terminalRefreshTimer = setTimeout(() => {
+    terminalRefreshTimer = undefined;
+    void heartbeat();
+  }, 50);
 }
 
 async function resolveCurrentWindowId(): Promise<string> {

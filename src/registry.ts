@@ -15,9 +15,11 @@ const emptyRegistry = (): RegistryData => ({
 
 export class Registry {
   private readonly filePath: string;
+  private readonly lockPath: string;
 
   public constructor(directory: string) {
     this.filePath = path.join(directory, "registry.json");
+    this.lockPath = path.join(directory, "registry.lock");
   }
 
   public async read(): Promise<RegistryData> {
@@ -40,10 +42,12 @@ export class Registry {
 
   public async update(mutator: (data: RegistryData) => RegistryData | void): Promise<RegistryData> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    const data = await this.read();
-    const next = mutator(data) ?? data;
-    await this.write(next);
-    return next;
+    return this.withLock(async () => {
+      const data = await this.read();
+      const next = mutator(data) ?? data;
+      await this.write(next);
+      return next;
+    });
   }
 
   public async upsertWindow(record: WindowRecord): Promise<RegistryData> {
@@ -118,6 +122,50 @@ export class Registry {
     await fs.writeFile(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     await fs.rename(tempPath, this.filePath);
   }
+
+  private async withLock<T>(action: () => Promise<T>): Promise<T> {
+    const token = `${process.pid}:${Date.now()}:${Math.random()}`;
+    const deadline = Date.now() + 5000;
+    let acquired = false;
+    while (!acquired) {
+      try {
+        const handle = await fs.open(this.lockPath, "wx");
+        try {
+          await handle.writeFile(token, "utf8");
+        } finally {
+          await handle.close();
+        }
+        acquired = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        await this.removeStaleLock();
+        if (Date.now() >= deadline) throw new Error("Timed out waiting for the Window Deck registry lock");
+        await delay(20);
+      }
+    }
+    try {
+      return await action();
+    } finally {
+      try {
+        if ((await fs.readFile(this.lockPath, "utf8")) === token) await fs.unlink(this.lockPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("Window Deck could not remove its registry lock", error);
+      }
+    }
+  }
+
+  private async removeStaleLock(): Promise<void> {
+    try {
+      const stat = await fs.stat(this.lockPath);
+      if (Date.now() - stat.mtimeMs > 10_000) await fs.unlink(this.lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseRegistryJson(text: string): RegistryData {

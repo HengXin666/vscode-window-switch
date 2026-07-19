@@ -191,7 +191,12 @@ export class TerminalStreamHub {
 
   private remember(windowId: string, terminalId: string, data: string): void {
     const key = `${windowId}:${terminalId}`;
-    const current = this.replay.get(key) ?? "";
+    let current = this.replay.get(key) ?? "";
+    // A full-screen clear starts a new logical terminal screen. Discarding
+    // older bytes prevents stale prompts/input from being painted above the
+    // current screen when the replay is mounted in a different-sized view.
+    const clearIndex = data.lastIndexOf("\u001b[2J");
+    if (clearIndex >= 0) current = "";
     const combined = current + data;
     if (combined.length <= 200_000) {
       this.replay.set(key, combined);
