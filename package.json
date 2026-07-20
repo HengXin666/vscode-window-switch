@@ -2,7 +2,7 @@
   "name": "window-deck",
   "displayName": "Window Deck",
   "description": "Semantic navigation for multiple VS Code windows without changing their contents.",
-  "version": "0.6.14",
+  "version": "0.6.15",
   "publisher": "HengXin666",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,9 @@
     "onCommand:windowDeck.reloadAllWindows"
   ],
   "main": "./dist/extension.js",
+  "enabledApiProposals": [
+    "terminalDataWriteEvent"
+  ],
   "extensionKind": [
     "ui"
   ],
@@ -99,6 +102,24 @@
         "category": "Window Deck"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "windowDeck",
+          "title": "同步终端",
+          "icon": "resources/window-deck.svg"
+        }
+      ]
+    },
+    "views": {
+      "windowDeck": [
+        {
+          "type": "webview",
+          "id": "windowDeck.syncTerminal",
+          "name": "窗口"
+        }
+      ]
+    },
     "configuration": {
       "title": "Window Deck",
       "properties": {
@@ -167,6 +188,18 @@
         },
         {
           "command": "windowDeck.reloadAllWindows"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "windowDeck.showWindows",
+          "group": "navigation@1",
+          "when": "view == windowDeck.syncTerminal"
+        },
+        {
+          "command": "windowDeck.openPanel",
+          "group": "navigation@2",
+          "when": "view == windowDeck.syncTerminal"
         }
       ]
     }

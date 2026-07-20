@@ -11,6 +11,7 @@ find_product_json() {
     "/usr/share/code-insiders/resources/app/product.json"
     "/opt/visual-studio-code/resources/app/product.json"
     "/Applications/Visual Studio Code.app/Contents/Resources/app/product.json"
+    "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/product.json"
   )
   local candidate
   for candidate in "${candidates[@]}"; do
@@ -21,7 +22,10 @@ find_product_json() {
   done
   if command -v code >/dev/null 2>&1; then
     local code_bin
-    code_bin="$(readlink -f "$(command -v code)")"
+    code_bin="$(command -v code)"
+    if resolved="$(readlink -f "$code_bin" 2>/dev/null)"; then
+      code_bin="$resolved"
+    fi
     candidate="$(dirname "$(dirname "$code_bin")")/resources/app/product.json"
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"

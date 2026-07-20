@@ -78,7 +78,12 @@ export class TerminalStreamHub {
   }
 
   public getReplay(windowId: string, terminalId: string): string {
-    return this.replay.get(`${windowId}:${terminalId}`) ?? "";
+    const replay = this.replay.get(`${windowId}:${terminalId}`) ?? "";
+    // Start every mounted replay from a known screen/cursor state. A replay
+    // can begin in the middle of an interactive shell's line-edit buffer;
+    // without this reset xterm renders stale cursor bytes as a garbage line at
+    // the top of the synchronized terminal.
+    return replay ? `\u001b[2J\u001b[H${replay}` : "";
   }
 
   public sendInput(targetWindowId: string, terminalId: string, data: string): void {
@@ -195,7 +200,11 @@ export class TerminalStreamHub {
     // A full-screen clear starts a new logical terminal screen. Discarding
     // older bytes prevents stale prompts/input from being painted above the
     // current screen when the replay is mounted in a different-sized view.
-    const clearIndex = data.lastIndexOf("\u001b[2J");
+    const clearIndex = Math.max(
+      data.lastIndexOf("\u001b[2J"),
+      data.lastIndexOf("\u001b[1;1H\u001b[0J"),
+      data.lastIndexOf("\u001b[H\u001b[2J")
+    );
     if (clearIndex >= 0) current = "";
     const combined = current + data;
     if (combined.length <= 200_000) {

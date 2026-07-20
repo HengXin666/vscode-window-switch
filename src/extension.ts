@@ -56,6 +56,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     scheduleTerminalRefresh
   );
   context.subscriptions.push(terminalStatusTracker);
+  // The proposed API permission lives in VS Code's product.json, while the
+  // extension manifest is copied into the installed VSIX. Keep the local
+  // declaration in sync on every start so an already-installed permission is
+  // immediately usable after an extension update (and after VS Code rewrites
+  // the extension directory).
+  await syncLocalTerminalApiDeclaration();
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = "windowDeck.showWindows";
   context.subscriptions.push(statusBarItem);
@@ -74,6 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshCurrentWindow: heartbeat,
     getTerminalReplay: (windowId, terminalId) => terminalStreamHub?.getReplay(windowId, terminalId) ?? ""
   });
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider("windowDeck.syncTerminal", deckPanel));
   bridgeServer = new BridgeServer(registry, () => currentWindowId, () => getConfigNumber("staleAfterMs") || 20000, {
     focusWindow: focusRegisteredWindow,
     focusTerminal,
@@ -167,13 +174,55 @@ async function setLocalTerminalApiDeclaration(enabled: boolean): Promise<void> {
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
+async function syncLocalTerminalApiDeclaration(): Promise<void> {
+  try {
+    const productPath = await findProductJsonPath();
+    if (!productPath) return;
+    const product = JSON.parse(await fs.readFile(productPath, "utf8")) as {
+      extensionEnabledApiProposals?: Record<string, unknown>;
+    };
+    const enabled = product.extensionEnabledApiProposals?.["HengXin666.window-deck"];
+    if (Array.isArray(enabled) && enabled.includes("terminalDataWriteEvent")) {
+      await setLocalTerminalApiDeclaration(true);
+    }
+  } catch (error) {
+    console.warn("Window Deck could not synchronize terminal API declaration", error);
+  }
+}
+
+async function findProductJsonPath(): Promise<string | undefined> {
+  const configured = process.env.WINDOW_DECK_PRODUCT_JSON;
+  const candidates = [
+    configured,
+    "/usr/share/code/resources/app/product.json",
+    "/usr/share/code-insiders/resources/app/product.json",
+    "/opt/visual-studio-code/resources/app/product.json",
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/product.json"
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Continue with the next known installation location.
+    }
+  }
+  return undefined;
+}
+
 function runElevatedScript(script: string): Promise<void> {
   if (process.platform === "win32") {
     return runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]);
   }
   if (process.platform === "darwin") {
-    const escaped = script.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return runProcess("osascript", ["-e", `do shell script "bash " & quoted form of "${escaped}" with administrator privileges`]);
+    // `quoted form of` performs the shell quoting. Escaping the path before
+    // passing it to AppleScript doubles backslashes on macOS and makes the
+    // installer fail for application paths containing spaces.
+    // GUI-launched VS Code often has a restricted PATH; preserve the current
+    // Node/Homebrew path so the installer can find `node` when run as root.
+    const pathValue = process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    const command = `export PATH=${shellQuote(pathValue)}; bash ${shellQuote(script)}`;
+    return runProcess("osascript", ["-e", `do shell script ${JSON.stringify(command)} with administrator privileges`]);
   }
   return runProcess("pkexec", ["bash", script]);
 }
@@ -197,7 +246,10 @@ function patchScriptPath(action: "install" | "uninstall"): string {
 
 function elevatedScriptCommand(script: string): string {
   if (process.platform === "win32") return `powershell -ExecutionPolicy Bypass -File "${script}"`;
-  if (process.platform === "darwin") return `osascript -e 'do shell script "bash " & quoted form of "${script.replace(/'/g, "'\\''")}" with administrator privileges'`;
+  if (process.platform === "darwin") {
+    const command = `bash ${shellQuote(script)}`;
+    return `osascript -e ${shellQuote(`do shell script ${JSON.stringify(command)} with administrator privileges`)}`;
+  }
   return `sudo bash ${shellQuote(script)}`;
 }
 
@@ -272,9 +324,9 @@ async function migrateLegacyWorkspaceTitle(): Promise<void> {
 }
 
 async function openPanel(): Promise<void> {
-  if (terminalStreamHub?.isPrimary && terminalStatusTracker && !terminalStatusTracker.supportsLiveData) {
+  if (terminalStatusTracker && !terminalStatusTracker.supportsLiveData) {
     await vscode.window.showWarningMessage(
-      "Window Deck 未获得 VS Code 原始终端数据权限；合并终端不会实时同步。请运行“Window Deck: 安装原生终端同步权限”，然后完全重启 VS Code。"
+      "Window Deck 当前未获得 VS Code 原始终端数据权限；远程窗口也会保留终端状态，但合并视图只能同步已捕获的命令输出。请运行“Window Deck: 安装原生终端同步权限”，然后完全重启 VS Code。"
     );
   }
   await deckPanel?.show();

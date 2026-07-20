@@ -47,8 +47,10 @@ type WindowDeckItemViewModel = {
   terminals: WindowTerminalRecord[];
 };
 
-export class WindowDeckPanel {
+export class WindowDeckPanel implements vscode.WebviewViewProvider {
   private panel?: vscode.WebviewPanel;
+  private view?: vscode.WebviewView;
+  private readonly webviews = new Set<vscode.Webview>();
   private refreshTimer?: NodeJS.Timeout;
 
   public constructor(
@@ -60,7 +62,24 @@ export class WindowDeckPanel {
   ) {}
 
   public pushTerminalData(windowId: string, terminalId: string, data: string): void {
-    void this.panel?.webview.postMessage({ type: "terminalData", windowId, terminalId, data });
+    for (const webview of this.webviews) {
+      void webview.postMessage({ type: "terminalData", windowId, terminalId, data });
+    }
+  }
+
+  public resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    view.onDidDispose(() => {
+      this.webviews.delete(view.webview);
+      if (this.view === view) {
+        this.view = undefined;
+      }
+      if (this.webviews.size === 0 && this.refreshTimer) {
+        clearInterval(this.refreshTimer);
+        this.refreshTimer = undefined;
+      }
+    });
+    this.attachWebview(view.webview, true);
   }
 
   public async show(): Promise<void> {
@@ -73,25 +92,20 @@ export class WindowDeckPanel {
       enableScripts: true,
       retainContextWhenHidden: true
     });
-    this.panel.webview.html = renderShell(this.panel.webview, this.extensionUri, readTerminalStyle());
-    this.panel.webview.onDidReceiveMessage((message: PanelMessage) => {
-      void this.handleMessage(message);
-    });
+    this.attachWebview(this.panel.webview);
     this.panel.onDidDispose(() => {
+      if (this.panel) this.webviews.delete(this.panel.webview);
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
         this.refreshTimer = undefined;
       }
       this.panel = undefined;
     });
-    this.refreshTimer = setInterval(() => {
-      void this.refresh();
-    }, 2000);
     await this.refresh();
   }
 
   public async refresh(): Promise<void> {
-    if (!this.panel) {
+    if (this.webviews.size === 0) {
       return;
     }
     await this.actions.refreshCurrentWindow();
@@ -104,12 +118,12 @@ export class WindowDeckPanel {
       ...layout,
       order: ordered.map((record) => record.windowId)
     };
-    await this.panel.webview.postMessage({
+    await Promise.all([...this.webviews].map((webview) => webview.postMessage({
       type: "windows",
       windows: ordered.map(toViewModel),
       layout: displayLayout,
       currentWindowId: this.currentWindowId()
-    });
+    })));
   }
 
   private async handleMessage(message: PanelMessage): Promise<void> {
@@ -119,7 +133,7 @@ export class WindowDeckPanel {
       await this.actions.checkForUpdates();
     } else if (message.windowId && message.terminalId && message.type === "requestTerminalReplay") {
       const data = this.actions.getTerminalReplay(message.windowId, message.terminalId);
-      await this.panel?.webview.postMessage({ type: "terminalReplay", windowId: message.windowId, terminalId: message.terminalId, data });
+      await Promise.all([...this.webviews].map((webview) => webview.postMessage({ type: "terminalReplay", windowId: message.windowId, terminalId: message.terminalId, data })));
       return;
     } else if (message.windowId && message.type === "focus") {
       await this.actions.focusWindow(message.windowId);
@@ -143,6 +157,26 @@ export class WindowDeckPanel {
     }
     await this.refresh();
   }
+
+  private attachWebview(webview: vscode.Webview, sidebar = false): void {
+    this.webviews.add(webview);
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist", "webview")]
+    };
+    webview.html = renderShell(webview, this.extensionUri, readTerminalStyle(), sidebar);
+    webview.onDidReceiveMessage((message: PanelMessage) => {
+      void this.handleMessage(message);
+    });
+    if (!this.refreshTimer) {
+      this.refreshTimer = setInterval(() => {
+        void this.refresh();
+      }, 2000);
+    }
+    // WebviewView has no reveal method; it is visible as soon as VS Code
+    // resolves it. WebviewPanel keeps its existing explicit reveal behavior.
+    if (sidebar) void this.refresh();
+  }
 }
 
 function readTerminalStyle(): { fontFamily: string; fontSize: number; fontWeight: string } {
@@ -154,7 +188,7 @@ function readTerminalStyle(): { fontFamily: string; fontSize: number; fontWeight
   };
 }
 
-function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefined, terminalStyle: { fontFamily: string; fontSize: number; fontWeight: string }): string {
+function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefined, terminalStyle: { fontFamily: string; fontSize: number; fontWeight: string }, sidebar = false): string {
   const nonce = randomId(24);
   const xtermScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "xterm.mjs")).toString() : "";
   const fitScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "addon-fit.mjs")).toString() : "";
@@ -172,6 +206,12 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     .surface { width: min(760px, calc(100vw - 24px)); margin: 12px auto; border: 1px solid var(--vscode-widget-border); border-radius: var(--radius); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); box-shadow: 0 8px 28px rgba(0,0,0,.28); overflow: hidden; }
     .surface.merged-mode { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+    .sidebar-mode .surface { width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+    .sidebar-mode .head, .sidebar-mode .tabs { display: none; }
+    .sidebar-mode .surface { grid-template-rows: minmax(0, 1fr); }
+    .sidebar-mode .merged { grid-template-columns: minmax(0, 1fr); }
+    .sidebar-mode .merged-main, .sidebar-mode .merged-resizer, .sidebar-mode .merged-column:last-child { display: none; }
+    .sidebar-mode #deck { min-height: 0; }
     .head { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); font-weight: 600; }
     .head small { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .head button { margin-left: 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 7px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; font-size: 11px; }
@@ -269,7 +309,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     }
   </style>
 </head>
-<body>
+<body class="${sidebar ? "sidebar-mode" : ""}">
   <main class="surface">
     <div class="head">Window Deck <small>窗口与原生终端导航</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
     <nav class="tabs"><button class="tab active" data-tab="quick">快速切换</button><button class="tab" data-tab="merged">合并终端</button><span class="mode-help" id="mode-help">终端仅显示状态，不可预览或操作</span></nav>
@@ -305,7 +345,7 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     let currentWindowId = "";
     let dragState = null;
     let editing = false;
-    let activeTab = "quick";
+    let activeTab = ${JSON.stringify(sidebar ? "merged" : "quick")};
     let preserveTerminalFocus = false;
     let selectedMergedWindowId = "";
     let selectedMergedTerminalId = "";
