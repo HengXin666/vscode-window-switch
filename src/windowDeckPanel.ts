@@ -868,9 +868,12 @@ function renderShell(
     }
 
     function showWindowMenu(windowId, x, y) {
-      menu.innerHTML = '<button data-cmd="rename">重命名标题</button><button data-cmd="remove">删除记录</button><div class="palette">' +
+      const item = findWindow(windowId);
+      const displayCommand = item && item.stale ? "open" : "focus";
+      menu.innerHTML = '<button data-cmd="display">显示窗口</button><button data-cmd="rename">重命名标题</button><button data-cmd="remove">删除记录</button><div class="palette">' +
         COLORS.map((color) => '<button class="swatch" title="' + esc(color) + '" data-color="' + esc(color) + '" style="--swatch:' + esc(color) + '"></button>').join("") + '</div>';
       placeMenu(x, y);
+      menu.querySelector('[data-cmd="display"]').onclick = () => { closeMenu(); vscode.postMessage({ type: displayCommand, windowId }); };
       menu.querySelector('[data-cmd="rename"]').onclick = () => { closeMenu(); beginRenameWindow(windowId); };
       menu.querySelector('[data-cmd="remove"]').onclick = () => { closeMenu(); removeFromLayout(windowId); vscode.postMessage({ type: "remove", windowId }); };
       menu.querySelectorAll("[data-color]").forEach((button) => button.onclick = () => { closeMenu(); vscode.postMessage({ type: "color", windowId, color: button.dataset.color }); });
