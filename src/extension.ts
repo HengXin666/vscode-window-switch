@@ -76,6 +76,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     renameWindow,
     setWindowColor,
     removeWindow,
+    openTerminalPage: (windowId) => deckPanel ? deckPanel.showTerminalPage(windowId) : Promise.resolve(),
     saveLayout: (layout) => registry.saveLayout(layout),
     refreshCurrentWindow: heartbeat,
     getTerminalReplay: (windowId, terminalId) => terminalStreamHub?.getReplay(windowId, terminalId) ?? ""

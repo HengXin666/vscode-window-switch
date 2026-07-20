@@ -17,6 +17,7 @@ type PanelActions = {
   renameWindow(windowId: string, alias: string): Promise<void>;
   setWindowColor(windowId: string, color: string): Promise<void>;
   removeWindow(windowId: string): Promise<void>;
+  openTerminalPage(windowId: string): Promise<void>;
   saveLayout(layout: WindowDeckLayout): Promise<void>;
   refreshCurrentWindow(): Promise<void>;
   getTerminalReplay(windowId: string, terminalId: string): string;
@@ -51,6 +52,7 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
   private panel?: vscode.WebviewPanel;
   private view?: vscode.WebviewView;
   private readonly webviews = new Set<vscode.Webview>();
+  private readonly terminalPages = new Map<string, vscode.WebviewPanel>();
   private refreshTimer?: NodeJS.Timeout;
 
   public constructor(
@@ -79,7 +81,7 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
         this.refreshTimer = undefined;
       }
     });
-    this.attachWebview(view.webview, true);
+    this.attachWebview(view.webview, { sidebar: true });
   }
 
   public async show(): Promise<void> {
@@ -100,6 +102,32 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
         this.refreshTimer = undefined;
       }
       this.panel = undefined;
+    });
+    await this.refresh();
+  }
+
+  public async showTerminalPage(windowId: string): Promise<void> {
+    const existing = this.terminalPages.get(windowId);
+    if (existing) {
+      existing.reveal(vscode.ViewColumn.Active, true);
+      await this.refresh();
+      return;
+    }
+    const page = vscode.window.createWebviewPanel(
+      "windowDeck.syncTerminalPage",
+      "同步终端",
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.terminalPages.set(windowId, page);
+    this.attachWebview(page.webview, { terminalOnly: true, initialWindowId: windowId });
+    page.onDidDispose(() => {
+      this.webviews.delete(page.webview);
+      if (this.terminalPages.get(windowId) === page) this.terminalPages.delete(windowId);
+      if (this.webviews.size === 0 && this.refreshTimer) {
+        clearInterval(this.refreshTimer);
+        this.refreshTimer = undefined;
+      }
     });
     await this.refresh();
   }
@@ -139,6 +167,8 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
       await this.actions.focusWindow(message.windowId);
     } else if (message.windowId && message.type === "open") {
       await this.actions.openWindow(message.windowId);
+    } else if (message.windowId && message.type === "openTerminalPage") {
+      await this.actions.openTerminalPage(message.windowId);
     } else if (message.windowId && message.terminalId && message.type === "terminal") {
       await this.actions.focusTerminal(message.windowId, message.terminalId);
     } else if (message.windowId && message.terminalId && typeof message.text === "string" && message.type === "terminalInput") {
@@ -158,13 +188,13 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
     await this.refresh();
   }
 
-  private attachWebview(webview: vscode.Webview, sidebar = false): void {
+  private attachWebview(webview: vscode.Webview, options: { sidebar?: boolean; terminalOnly?: boolean; initialWindowId?: string } = {}): void {
     this.webviews.add(webview);
     webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist", "webview")]
     };
-    webview.html = renderShell(webview, this.extensionUri, readTerminalStyle(), sidebar);
+    webview.html = renderShell(webview, this.extensionUri, readTerminalStyle(), options);
     webview.onDidReceiveMessage((message: PanelMessage) => {
       void this.handleMessage(message);
     });
@@ -175,7 +205,7 @@ export class WindowDeckPanel implements vscode.WebviewViewProvider {
     }
     // WebviewView has no reveal method; it is visible as soon as VS Code
     // resolves it. WebviewPanel keeps its existing explicit reveal behavior.
-    if (sidebar) void this.refresh();
+    if (options.sidebar) void this.refresh();
   }
 }
 
@@ -188,7 +218,14 @@ function readTerminalStyle(): { fontFamily: string; fontSize: number; fontWeight
   };
 }
 
-function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefined, terminalStyle: { fontFamily: string; fontSize: number; fontWeight: string }, sidebar = false): string {
+function renderShell(
+  webview: vscode.Webview,
+  extensionRoot: vscode.Uri | undefined,
+  terminalStyle: { fontFamily: string; fontSize: number; fontWeight: string },
+  options: { sidebar?: boolean; terminalOnly?: boolean; initialWindowId?: string } = {}
+): string {
+  const sidebar = Boolean(options.sidebar);
+  const terminalOnly = Boolean(options.terminalOnly);
   const nonce = randomId(24);
   const xtermScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "xterm.mjs")).toString() : "";
   const fitScript = extensionRoot ? webview.asWebviewUri(vscode.Uri.joinPath(extensionRoot, "dist", "webview", "addon-fit.mjs")).toString() : "";
@@ -212,6 +249,10 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     .sidebar-mode .merged { grid-template-columns: minmax(0, 1fr); }
     .sidebar-mode .merged-main, .sidebar-mode .merged-resizer, .sidebar-mode .merged-column:last-child { display: none; }
     .sidebar-mode #deck { min-height: 0; }
+    .terminal-only .head, .terminal-only .tabs { display: none; }
+    .terminal-only .surface { display: grid; grid-template-rows: minmax(0, 1fr); width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+    .terminal-only .merged { grid-template-columns: minmax(0, 1fr) 5px minmax(160px, var(--merged-right-width)); }
+    .terminal-only .merged > .merged-column:first-child, .terminal-only .merged > .merged-resizer:first-of-type { display: none; }
     .head { display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBar-background); font-weight: 600; }
     .head small { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
     .head button { margin-left: 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 3px 7px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; font: inherit; font-size: 11px; }
@@ -309,10 +350,10 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     }
   </style>
 </head>
-<body class="${sidebar ? "sidebar-mode" : ""}">
+<body class="${sidebar ? "sidebar-mode" : terminalOnly ? "terminal-only" : ""}">
   <main class="surface">
     <div class="head">Window Deck <small>窗口与原生终端导航</small><button id="check-updates" title="从 GitHub Release 检查 Window Deck 更新">检查更新</button></div>
-    <nav class="tabs"><button class="tab active" data-tab="quick">快速切换</button><button class="tab" data-tab="merged">合并终端</button><span class="mode-help" id="mode-help">终端仅显示状态，不可预览或操作</span></nav>
+    <nav class="tabs"><button class="tab active" data-tab="quick">快速切换</button>${terminalOnly ? "" : ""}<span class="mode-help" id="mode-help">终端仅显示状态，不可预览或操作</span></nav>
     <div class="list" id="deck"></div>
   </main>
   <div class="menu" id="menu"></div>
@@ -345,9 +386,11 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
     let currentWindowId = "";
     let dragState = null;
     let editing = false;
-    let activeTab = ${JSON.stringify(sidebar ? "merged" : "quick")};
+    const sidebarMode = ${JSON.stringify(sidebar)};
+    const terminalOnly = ${JSON.stringify(terminalOnly)};
+    let activeTab = ${JSON.stringify(terminalOnly ? "merged" : "quick")};
     let preserveTerminalFocus = false;
-    let selectedMergedWindowId = "";
+    let selectedMergedWindowId = ${JSON.stringify(options.initialWindowId || "")};
     let selectedMergedTerminalId = "";
     const persistedWebviewState = vscode.getState() || {};
     let storedWidths = {};
@@ -568,8 +611,8 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
       const toolbar = '<div class="terminal-toolbar"><span class="terminal-toolbar-title">' + esc(toolbarTitle) + '</span>' +
         (selectedTerminal ? '<span class="terminal-toolbar-state">' + esc(terminalStateLabel(selectedTerminal.state || "idle")) + ' · 同步视图</span>' : '') + '</div>';
       const center = selectedTerminal
-        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="合并终端输出"></div></div>'
-        : '<div class="terminal-unavailable"><strong>所选窗口没有终端</strong><span>合并终端页只展示终端，不会打开或切换 VS Code 窗口。</span></div>';
+        ? '<div class="native-terminal"><div class="terminal-viewport" data-terminal-viewport tabindex="0" aria-label="同步终端输出"></div></div>'
+        : '<div class="terminal-unavailable"><strong>所选窗口没有终端</strong><span>同步终端页只展示终端，不会打开或切换 VS Code 窗口。</span></div>';
       const terminalTitle = '<div class="merged-title"><span>终端</span><span class="merged-title-actions"><button class="merged-title-action" data-new-terminal title="新建终端" aria-label="新建终端">＋</button></span></div>';
       return '<div class="merged" style="--merged-left-width:' + Math.round(mergedLeftWidth) + 'px;--merged-right-width:' + Math.round(mergedRightWidth) + 'px"><aside class="merged-column"><div class="merged-title">窗口</div><div class="merged-scroll" data-scroll="windows">' + (windowItems || '<div class="empty">没有窗口</div>') + '<div class="merged-group-drop" data-merged-group-drop>拖到这里创建分组</div></div></aside><div class="merged-resizer" data-resize="left" role="separator" tabindex="0" aria-label="调整窗口看板宽度" aria-orientation="vertical"></div><section class="merged-main">' + toolbar + center + '</section><div class="merged-resizer" data-resize="right" role="separator" tabindex="0" aria-label="调整终端看板宽度" aria-orientation="vertical"></div><aside class="merged-column">' + terminalTitle + '<div class="merged-scroll" data-scroll="terminals">' + (terminalItems || '<div class="empty">没有终端</div>') + '</div></aside></div>';
     }
@@ -666,6 +709,10 @@ function renderShell(webview: vscode.Webview, extensionRoot: vscode.Uri | undefi
       scope.querySelectorAll(".row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("button") || event.target.closest("input")) return;
+          if (sidebarMode) {
+            vscode.postMessage({ type: "openTerminalPage", windowId: row.dataset.windowId });
+            return;
+          }
           const item = findWindow(row.dataset.windowId);
           vscode.postMessage({ type: item && item.stale ? "open" : "focus", windowId: row.dataset.windowId });
         });
